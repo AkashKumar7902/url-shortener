@@ -3,9 +3,11 @@ package file_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -112,6 +114,53 @@ func TestStoreHonorsCancelledContext(t *testing.T) {
 	}
 	if err := store.Insert(ctx, link); !errors.Is(err, context.Canceled) {
 		t.Fatalf("Insert() error = %v; want context.Canceled", err)
+	}
+}
+
+func TestConcurrentDistinctInsertsAllSurviveReopen(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "links.json")
+	store, err := filestore.Open(path)
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	const workers = 40
+	createdAt := time.Now().UTC()
+
+	start := make(chan struct{})
+	errorsFound := make(chan error, workers)
+	var waitGroup sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		i := i
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			<-start
+			errorsFound <- store.Insert(context.Background(), shortener.Link{
+				Code:      fmt.Sprintf("code_%02d", i),
+				URL:       fmt.Sprintf("https://example.com/%d", i),
+				Kind:      shortener.KindCustom,
+				CreatedAt: createdAt,
+			})
+		}()
+	}
+	close(start)
+	waitGroup.Wait()
+	close(errorsFound)
+	for err := range errorsFound {
+		if err != nil {
+			t.Errorf("concurrent Insert() error = %v", err)
+		}
+	}
+
+	reopened, err := filestore.Open(path)
+	if err != nil {
+		t.Fatalf("reopen store error = %v", err)
+	}
+	for i := 0; i < workers; i++ {
+		code := fmt.Sprintf("code_%02d", i)
+		if _, err := reopened.GetByCode(context.Background(), code); err != nil {
+			t.Errorf("GetByCode(%q) after reopen error = %v", code, err)
+		}
 	}
 }
 

@@ -133,6 +133,7 @@ func TestHTTPBoundaryErrors(t *testing.T) {
 	}{
 		{name: "missing content type", method: http.MethodPost, path: "/shorten", body: `{"url":"https://example.com"}`, status: 415, errorCode: "unsupported_media_type"},
 		{name: "wrong content type", method: http.MethodPost, path: "/shorten", contentType: "text/plain", body: `{}`, status: 415, errorCode: "unsupported_media_type"},
+		{name: "empty body", method: http.MethodPost, path: "/shorten", contentType: "application/json", body: ``, status: 400, errorCode: "invalid_json"},
 		{name: "malformed JSON", method: http.MethodPost, path: "/shorten", contentType: "application/json", body: `{`, status: 400, errorCode: "invalid_json"},
 		{name: "unknown JSON field", method: http.MethodPost, path: "/shorten", contentType: "application/json", body: `{"url":"https://example.com","extra":true}`, status: 400, errorCode: "invalid_json"},
 		{name: "multiple JSON values", method: http.MethodPost, path: "/shorten", contentType: "application/json", body: `{"url":"https://example.com"} {}`, status: 400, errorCode: "invalid_json"},

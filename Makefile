@@ -1,4 +1,5 @@
 GO ?= go
+GOFMT ?= gofmt
 
 .PHONY: run build test test-race vet fmt fmt-check check
 
@@ -22,7 +23,8 @@ fmt:
 	$(GO) fmt ./...
 
 fmt-check:
-	@files="$$(find . -type f -name '*.go' -exec gofmt -l {} +)"; \
+	@command -v $(GOFMT) >/dev/null 2>&1 || (echo "gofmt was not found"; exit 1)
+	@files="$$(find . -type f -name '*.go' -exec $(GOFMT) -l {} +)"; \
 		test -z "$$files" || (echo "Go files need formatting:"; echo "$$files"; exit 1)
 
 check: fmt-check vet test-race

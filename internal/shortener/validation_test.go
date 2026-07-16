@@ -92,8 +92,11 @@ func FuzzValidateURL(f *testing.F) {
 			t.Fatalf("accepted URL was rewritten: got %q, want %q", validated, input)
 		}
 		parsed, err := url.Parse(validated)
-		if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" {
+		if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || parsed.Opaque != "" || parsed.User != nil {
 			t.Fatalf("accepted URL violates validation invariant: %q", validated)
+		}
+		if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+			t.Fatalf("accepted URL has unsupported scheme: %q", validated)
 		}
 	})
 }

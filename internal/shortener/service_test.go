@@ -69,6 +69,52 @@ func TestCustomAliasPolicies(t *testing.T) {
 	}
 }
 
+func TestCustomAliasIsHonoredAfterURLWasGenerated(t *testing.T) {
+	store := openTestStore(t)
+	service := shortener.NewService(store, staticGenerator{code: "automatic_code"})
+	ctx := context.Background()
+	target := "https://example.com/already-generated"
+
+	generated, err := service.Shorten(ctx, shortener.ShortenRequest{URL: target})
+	if err != nil {
+		t.Fatalf("generated Shorten() error = %v", err)
+	}
+	alias := "readable_alias"
+	custom, err := service.Shorten(ctx, shortener.ShortenRequest{URL: target, CustomAlias: &alias})
+	if err != nil {
+		t.Fatalf("custom Shorten() error = %v", err)
+	}
+	if !custom.Created || custom.Link.Code != alias {
+		t.Fatalf("custom result = %+v; want newly created alias %q", custom, alias)
+	}
+	if custom.Link.Code == generated.Link.Code {
+		t.Fatalf("explicit alias was ignored in favor of generated code %q", generated.Link.Code)
+	}
+}
+
+func TestCustomAliasCannotOverwriteGeneratedCode(t *testing.T) {
+	store := openTestStore(t)
+	service := shortener.NewService(store, staticGenerator{code: "generated_claim"})
+	ctx := context.Background()
+
+	generated, err := service.Shorten(ctx, shortener.ShortenRequest{URL: "https://existing.example"})
+	if err != nil {
+		t.Fatalf("generated Shorten() error = %v", err)
+	}
+	alias := generated.Link.Code
+	_, err = service.Shorten(ctx, shortener.ShortenRequest{
+		URL:         "https://attacker.example",
+		CustomAlias: &alias,
+	})
+	if !errors.Is(err, shortener.ErrAliasConflict) {
+		t.Fatalf("custom Shorten() error = %v; want ErrAliasConflict", err)
+	}
+	resolved, err := service.Resolve(ctx, generated.Link.Code)
+	if err != nil || resolved.URL != "https://existing.example" {
+		t.Fatalf("generated mapping was overwritten: link=%+v err=%v", resolved, err)
+	}
+}
+
 func TestGeneratedCodeCollisionRetriesWithoutOverwrite(t *testing.T) {
 	store := openTestStore(t)
 	setupService := shortener.NewService(store, staticGenerator{code: "unused"})
