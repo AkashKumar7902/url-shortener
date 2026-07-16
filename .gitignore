@@ -1,0 +1,16 @@
+# Runtime data
+/data/
+*.tmp
+
+# Build and test output
+/bin/
+/urlshortener
+coverage.out
+coverage.html
+*.test
+
+# Local configuration and editor files
+.env
+.DS_Store
+.idea/
+.vscode/
