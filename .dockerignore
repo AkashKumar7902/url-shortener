@@ -1,0 +1,10 @@
+.git
+.gitignore
+.env
+data
+bin
+coverage.out
+coverage.html
+*.test
+README.md
+WRITEUP.md
