@@ -29,6 +29,8 @@ type Store struct {
 	path           string
 	linksByCode    map[string]shortener.Link
 	generatedByURL map[string]string
+	syncDirectory  func(string) error
+	durabilityErr  error
 }
 
 func Open(path string) (*Store, error) {
@@ -44,6 +46,7 @@ func Open(path string) (*Store, error) {
 		path:           path,
 		linksByCode:    make(map[string]shortener.Link),
 		generatedByURL: make(map[string]string),
+		syncDirectory:  syncDirectory,
 	}
 	if err := store.load(); err != nil {
 		return nil, err
@@ -59,6 +62,9 @@ func (s *Store) GetByCode(ctx context.Context, code string) (shortener.Link, err
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.durabilityErr != nil {
+		return shortener.Link{}, fmt.Errorf("datastore unavailable after durability failure: %w", s.durabilityErr)
+	}
 
 	link, ok := s.linksByCode[code]
 	if !ok {
@@ -74,6 +80,9 @@ func (s *Store) GetGeneratedByURL(ctx context.Context, rawURL string) (shortener
 
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+	if s.durabilityErr != nil {
+		return shortener.Link{}, fmt.Errorf("datastore unavailable after durability failure: %w", s.durabilityErr)
+	}
 
 	code, ok := s.generatedByURL[rawURL]
 	if !ok {
@@ -98,13 +107,16 @@ func (s *Store) Insert(ctx context.Context, link shortener.Link) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if _, exists := s.linksByCode[link.Code]; exists {
-		return shortener.ErrCodeAlreadyExists
+	if s.durabilityErr != nil {
+		return fmt.Errorf("datastore unavailable after durability failure: %w", s.durabilityErr)
 	}
 	if link.Kind == shortener.KindGenerated {
 		if _, exists := s.generatedByURL[link.URL]; exists {
 			return shortener.ErrGeneratedURLAlreadyExists
 		}
+	}
+	if _, exists := s.linksByCode[link.Code]; exists {
+		return shortener.ErrCodeAlreadyExists
 	}
 
 	nextByCode := cloneLinks(s.linksByCode)
@@ -117,6 +129,12 @@ func (s *Store) Insert(ctx context.Context, link shortener.Link) error {
 		s.linksByCode = nextByCode
 		if link.Kind == shortener.KindGenerated {
 			s.generatedByURL[link.URL] = link.Code
+		}
+		if err != nil {
+			// The rename made the state visible, but its directory entry could
+			// not be confirmed durable. Refuse later acknowledgements until a
+			// clean reopen instead of returning 200 for uncertain state.
+			s.durabilityErr = err
 		}
 	}
 	if err != nil {
@@ -223,16 +241,23 @@ func (s *Store) writeSnapshot(links map[string]shortener.Link) (committed bool, 
 	}
 	committed = true
 
-	directoryHandle, err := os.Open(directory)
-	if err != nil {
-		return true, fmt.Errorf("open data directory for sync: %w", err)
-	}
-	defer directoryHandle.Close()
-	if err := directoryHandle.Sync(); err != nil {
-		return true, fmt.Errorf("sync data directory: %w", err)
+	if err := s.syncDirectory(directory); err != nil {
+		return true, err
 	}
 
 	return true, nil
+}
+
+func syncDirectory(directory string) error {
+	directoryHandle, err := os.Open(directory)
+	if err != nil {
+		return fmt.Errorf("open data directory for sync: %w", err)
+	}
+	defer directoryHandle.Close()
+	if err := directoryHandle.Sync(); err != nil {
+		return fmt.Errorf("sync data directory: %w", err)
+	}
+	return nil
 }
 
 func validateLink(link shortener.Link) error {

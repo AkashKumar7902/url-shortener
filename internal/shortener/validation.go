@@ -24,6 +24,8 @@ func ValidateURL(rawURL string) (string, error) {
 		return "", fmt.Errorf("%w: surrounding whitespace is not allowed", ErrInvalidURL)
 	case strings.Contains(rawURL, `\`):
 		return "", fmt.Errorf("%w: backslashes are not allowed", ErrInvalidURL)
+	case strings.IndexFunc(rawURL, func(r rune) bool { return r > unicode.MaxASCII }) >= 0:
+		return "", fmt.Errorf("%w: non-ASCII hostnames must use punycode and paths must be percent-encoded", ErrInvalidURL)
 	case strings.IndexFunc(rawURL, func(r rune) bool {
 		return unicode.IsControl(r) || unicode.IsSpace(r)
 	}) >= 0:
@@ -44,6 +46,9 @@ func ValidateURL(rawURL string) (string, error) {
 	}
 	if parsed.User != nil {
 		return "", fmt.Errorf("%w: embedded credentials are not allowed", ErrInvalidURL)
+	}
+	if strings.HasSuffix(parsed.Host, ":") {
+		return "", fmt.Errorf("%w: port must not be empty", ErrInvalidURL)
 	}
 	if port := parsed.Port(); port != "" {
 		value, err := strconv.Atoi(port)

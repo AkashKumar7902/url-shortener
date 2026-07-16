@@ -97,7 +97,7 @@ func (s *Service) shortenGenerated(ctx context.Context, rawURL string) (ShortenR
 	for attempt := 0; attempt < maxCodeAttempts; attempt++ {
 		code, err := s.generator.Generate()
 		if err != nil {
-			return ShortenResult{}, fmt.Errorf("%w: %v", ErrCodeGenerationFailed, err)
+			return ShortenResult{}, fmt.Errorf("%w: %w", ErrCodeGenerationFailed, err)
 		}
 		if !validGeneratedCode(code) {
 			return ShortenResult{}, fmt.Errorf("%w: generator returned a non-URL-safe code", ErrCodeGenerationFailed)
@@ -115,7 +115,17 @@ func (s *Service) shortenGenerated(ctx context.Context, rawURL string) (ShortenR
 			return ShortenResult{Link: link, Created: true}, nil
 		case errors.Is(err, ErrCodeAlreadyExists):
 			// The candidate collided with either a generated code or custom alias.
-			// A new candidate is safe because no existing row was overwritten.
+			// Re-read first: a concurrent request may have inserted this same
+			// candidate for this same URL after our initial lookup.
+			winner, getErr := s.store.GetGeneratedByURL(ctx, rawURL)
+			if getErr == nil {
+				return ShortenResult{Link: winner, Created: false}, nil
+			}
+			if !errors.Is(getErr, ErrNotFound) {
+				return ShortenResult{}, fmt.Errorf("check generated link after code conflict: %w", getErr)
+			}
+			// No URL winner exists, so the candidate collided with another
+			// mapping. A new candidate is safe because nothing was overwritten.
 			continue
 		case errors.Is(err, ErrGeneratedURLAlreadyExists):
 			winner, getErr := s.store.GetGeneratedByURL(ctx, rawURL)

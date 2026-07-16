@@ -57,8 +57,8 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, http.StatusNotFound, "not_found", "short code not found")
 		return
 	}
-	if r.Method != http.MethodGet {
-		allowed := http.MethodGet
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		allowed := http.MethodGet + ", " + http.MethodHead
 		if code == "shorten" {
 			allowed += ", " + http.MethodPost
 		}
@@ -211,7 +211,7 @@ func normalizeBaseURL(raw string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("invalid PUBLIC_BASE_URL: %w", err)
 	}
-	if (parsed.Path != "" && parsed.Path != "/") || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if (parsed.Path != "" && parsed.Path != "/") || parsed.ForceQuery || parsed.RawQuery != "" || strings.Contains(validated, "#") {
 		return "", fmt.Errorf("invalid PUBLIC_BASE_URL: path, query, and fragment are not allowed")
 	}
 	return strings.TrimSuffix(validated, "/"), nil

@@ -117,6 +117,26 @@ func TestUnknownCodeReturnsUncached404(t *testing.T) {
 	}
 }
 
+func TestHeadReturnsRedirectWithoutBody(t *testing.T) {
+	handler := newTestHandler(t)
+	created := performJSONRequest(t, handler, http.MethodPost, "/shorten", `{"url":"https://example.com/head","custom_alias":"head"}`)
+	if created.Code != http.StatusCreated {
+		t.Fatalf("create status = %d; body=%s", created.Code, created.Body.String())
+	}
+
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodHead, "/head", nil))
+	if response.Code != http.StatusMovedPermanently {
+		t.Fatalf("HEAD status = %d; want 301", response.Code)
+	}
+	if location := response.Header().Get("Location"); location != "https://example.com/head" {
+		t.Fatalf("HEAD Location = %q; want target URL", location)
+	}
+	if response.Body.Len() != 0 {
+		t.Fatalf("HEAD body length = %d; want 0", response.Body.Len())
+	}
+}
+
 func TestHTTPBoundaryErrors(t *testing.T) {
 	t.Parallel()
 
@@ -140,8 +160,8 @@ func TestHTTPBoundaryErrors(t *testing.T) {
 		{name: "oversized body", method: http.MethodPost, path: "/shorten", contentType: "application/json", body: oversizedBody, status: 413, errorCode: "body_too_large"},
 		{name: "invalid URL", method: http.MethodPost, path: "/shorten", contentType: "application/json; charset=utf-8", body: `{"url":"javascript:alert(1)"}`, status: 400, errorCode: "invalid_url"},
 		{name: "explicit empty alias", method: http.MethodPost, path: "/shorten", contentType: "application/json", body: `{"url":"https://example.com","custom_alias":""}`, status: 400, errorCode: "invalid_alias"},
-		{name: "wrong code method", method: http.MethodPut, path: "/abc", status: 405, errorCode: "method_not_allowed", allow: "GET"},
-		{name: "wrong shorten method", method: http.MethodDelete, path: "/shorten", status: 405, errorCode: "method_not_allowed", allow: "GET, POST"},
+		{name: "wrong code method", method: http.MethodPut, path: "/abc", status: 405, errorCode: "method_not_allowed", allow: "GET, HEAD"},
+		{name: "wrong shorten method", method: http.MethodDelete, path: "/shorten", status: 405, errorCode: "method_not_allowed", allow: "GET, HEAD, POST"},
 		{name: "root path", method: http.MethodGet, path: "/", status: 404, errorCode: "not_found"},
 		{name: "nested path", method: http.MethodGet, path: "/abc/def", status: 404, errorCode: "not_found"},
 		{name: "encoded slash", method: http.MethodGet, path: "/abc%2Fdef", status: 404, errorCode: "not_found"},
@@ -218,7 +238,11 @@ func TestPublicBaseURLValidation(t *testing.T) {
 		"https://user:pass@sho.rt",
 		"https://sho.rt/prefix",
 		"https://sho.rt?query=1",
+		"https://sho.rt?",
+		"https://sho.rt/?",
 		"https://sho.rt#fragment",
+		"https://sho.rt#",
+		"https://sho.rt/#",
 	} {
 		if _, err := httpapi.New(service, invalid, discardLogger()); err == nil {
 			t.Errorf("httpapi.New(..., %q) returned nil error", invalid)

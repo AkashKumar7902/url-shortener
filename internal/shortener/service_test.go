@@ -215,6 +215,50 @@ func TestConcurrentGeneratedRequestsConvergeOnOneCode(t *testing.T) {
 	}
 }
 
+func TestConcurrentDuplicateWithSameCandidateReturnsWinner(t *testing.T) {
+	store := openTestStore(t)
+	generator := newBarrierGenerator("same_candidate", 2)
+	service := shortener.NewService(store, generator)
+	const workers = 2
+
+	results := make(chan shortener.ShortenResult, workers)
+	errorsFound := make(chan error, workers)
+	var waitGroup sync.WaitGroup
+	for i := 0; i < workers; i++ {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			result, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://example.com/same-candidate"})
+			if err != nil {
+				errorsFound <- err
+				return
+			}
+			results <- result
+		}()
+	}
+	waitGroup.Wait()
+	close(results)
+	close(errorsFound)
+
+	for err := range errorsFound {
+		t.Errorf("concurrent Shorten() error = %v", err)
+	}
+	createdCount := 0
+	resultCount := 0
+	for result := range results {
+		resultCount++
+		if result.Link.Code != "same_candidate" {
+			t.Errorf("code = %q; want same_candidate", result.Link.Code)
+		}
+		if result.Created {
+			createdCount++
+		}
+	}
+	if resultCount != workers || createdCount != 1 {
+		t.Fatalf("results = %d, created = %d; want 2 results and 1 creation", resultCount, createdCount)
+	}
+}
+
 func TestConcurrentAliasClaimHasOneWinner(t *testing.T) {
 	store := openTestStore(t)
 	service := shortener.NewService(store, staticGenerator{code: "unused"})
@@ -261,11 +305,15 @@ func TestConcurrentAliasClaimHasOneWinner(t *testing.T) {
 
 func TestServiceReportsGeneratorFailure(t *testing.T) {
 	store := openTestStore(t)
-	service := shortener.NewService(store, errorGenerator{err: errors.New("entropy unavailable")})
+	cause := errors.New("entropy unavailable")
+	service := shortener.NewService(store, errorGenerator{err: cause})
 
 	_, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://example.com"})
 	if !errors.Is(err, shortener.ErrCodeGenerationFailed) {
 		t.Fatalf("Shorten() error = %v; want ErrCodeGenerationFailed", err)
+	}
+	if !errors.Is(err, cause) {
+		t.Fatalf("Shorten() error = %v; want wrapped entropy cause", err)
 	}
 }
 
@@ -323,4 +371,23 @@ type countingGenerator struct {
 
 func (g *countingGenerator) Generate() (string, error) {
 	return fmt.Sprintf("generated_%d", g.value.Add(1)), nil
+}
+
+type barrierGenerator struct {
+	code     string
+	want     int64
+	arrivals atomic.Int64
+	release  chan struct{}
+}
+
+func newBarrierGenerator(code string, want int64) *barrierGenerator {
+	return &barrierGenerator{code: code, want: want, release: make(chan struct{})}
+}
+
+func (g *barrierGenerator) Generate() (string, error) {
+	if g.arrivals.Add(1) == g.want {
+		close(g.release)
+	}
+	<-g.release
+	return g.code, nil
 }

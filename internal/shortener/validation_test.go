@@ -18,6 +18,7 @@ func TestValidateURL(t *testing.T) {
 		"http://127.0.0.1:8080/a",
 		"https://[2001:db8::1]/resource",
 		"https://example.com/a%20b?q=signed%2Fvalue",
+		"https://xn--r8jz45g.xn--zckzah/caf%C3%A9",
 	}
 	for _, input := range valid {
 		input := input
@@ -48,6 +49,9 @@ func TestValidateURL(t *testing.T) {
 		"https://example.com/%zz",
 		"https://example.com:0/path",
 		"https://example.com:65536/path",
+		"https://example.com:",
+		"https://[::1]:",
+		"https://例え.テスト/café",
 		strings.Repeat("x", shortener.MaxURLLength+1),
 	}
 	for _, input := range invalid {
