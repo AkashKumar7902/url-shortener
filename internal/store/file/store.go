@@ -34,8 +34,15 @@ type Store struct {
 }
 
 func Open(path string) (*Store, error) {
+	return open(path, syncDirectory)
+}
+
+func open(path string, directorySync func(string) error) (*Store, error) {
 	if path == "" {
 		return nil, fmt.Errorf("data-file path is required")
+	}
+	if directorySync == nil {
+		return nil, fmt.Errorf("directory sync function is required")
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
@@ -46,10 +53,19 @@ func Open(path string) (*Store, error) {
 		path:           path,
 		linksByCode:    make(map[string]shortener.Link),
 		generatedByURL: make(map[string]string),
-		syncDirectory:  syncDirectory,
+		syncDirectory:  directorySync,
 	}
-	if err := store.load(); err != nil {
+	exists, err := store.load()
+	if err != nil {
 		return nil, err
+	}
+	if exists {
+		// A previous process may have renamed the snapshot but failed while
+		// syncing its directory entry. Re-establish that durability barrier
+		// before treating a visible existing snapshot as healthy.
+		if err := store.syncDirectory(filepath.Dir(path)); err != nil {
+			return nil, fmt.Errorf("sync existing data file directory: %w", err)
+		}
 	}
 
 	return store, nil
@@ -144,13 +160,13 @@ func (s *Store) Insert(ctx context.Context, link shortener.Link) error {
 	return nil
 }
 
-func (s *Store) load() error {
+func (s *Store) load() (bool, error) {
 	f, err := os.Open(s.path)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil
+		return false, nil
 	}
 	if err != nil {
-		return fmt.Errorf("open data file: %w", err)
+		return false, fmt.Errorf("open data file: %w", err)
 	}
 	defer f.Close()
 
@@ -159,32 +175,32 @@ func (s *Store) load() error {
 
 	var state persistedState
 	if err := decoder.Decode(&state); err != nil {
-		return fmt.Errorf("decode data file: %w", err)
+		return false, fmt.Errorf("decode data file: %w", err)
 	}
 	if err := expectJSONEnd(decoder); err != nil {
-		return fmt.Errorf("decode data file: %w", err)
+		return false, fmt.Errorf("decode data file: %w", err)
 	}
 	if state.Version != stateVersion {
-		return fmt.Errorf("unsupported data-file version %d", state.Version)
+		return false, fmt.Errorf("unsupported data-file version %d", state.Version)
 	}
 
 	for index, link := range state.Links {
 		if err := validateLink(link); err != nil {
-			return fmt.Errorf("invalid link at index %d: %w", index, err)
+			return false, fmt.Errorf("invalid link at index %d: %w", index, err)
 		}
 		if _, exists := s.linksByCode[link.Code]; exists {
-			return fmt.Errorf("duplicate code %q in data file", link.Code)
+			return false, fmt.Errorf("duplicate code %q in data file", link.Code)
 		}
 		if link.Kind == shortener.KindGenerated {
 			if _, exists := s.generatedByURL[link.URL]; exists {
-				return fmt.Errorf("duplicate generated URL at index %d", index)
+				return false, fmt.Errorf("duplicate generated URL at index %d", index)
 			}
 			s.generatedByURL[link.URL] = link.Code
 		}
 		s.linksByCode[link.Code] = link
 	}
 
-	return nil
+	return true, nil
 }
 
 // writeSnapshot reports committed=true after the atomic rename. An error can

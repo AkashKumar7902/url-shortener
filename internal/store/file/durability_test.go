@@ -35,9 +35,14 @@ func TestPostRenameSyncFailurePoisonsStoreUntilReopen(t *testing.T) {
 		t.Fatalf("GetGeneratedByURL() error = %v; poisoned store must not acknowledge uncertain durability", err)
 	}
 
-	// Rename completed before the injected failure, so a clean reopen can
-	// validate and serve the visible snapshot again.
-	reopened, err := Open(path)
+	// Visibility is not durability. Reopen must establish a successful
+	// directory barrier before it can clear the poisoned state.
+	recoveryCause := errors.New("injected recovery sync failure")
+	if _, err := open(path, func(string) error { return recoveryCause }); !errors.Is(err, recoveryCause) {
+		t.Fatalf("open() error = %v; want recovery sync failure", err)
+	}
+
+	reopened, err := open(path, syncDirectory)
 	if err != nil {
 		t.Fatalf("reopen after injected failure: %v", err)
 	}

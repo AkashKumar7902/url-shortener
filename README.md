@@ -173,7 +173,7 @@ The datastore keeps a versioned JSON snapshot with immutable records:
 }
 ```
 
-Within one process, a mutex makes the two invariants linearizable: codes are unique across both kinds, and each exact URL has at most one generated code. A successful mutation is serialized to a same-directory temporary file, flushed, and atomically renamed over the prior snapshot. If the rename succeeds but directory synchronization fails, that store instance becomes unavailable rather than later acknowledging uncertain durability. Loading also validates the version and every persisted invariant rather than trusting disk contents.
+Within one process, a mutex makes the two invariants linearizable: codes are unique across both kinds, and each exact URL has at most one generated code. A successful mutation is serialized to a same-directory temporary file, flushed, and atomically renamed over the prior snapshot. If the rename succeeds but directory synchronization fails, that store instance becomes unavailable rather than later acknowledging uncertain durability. Reopening an existing snapshot must successfully repeat the directory durability barrier before becoming healthy. Loading also validates the version and every persisted invariant rather than trusting disk contents.
 
 Destination URLs can contain sensitive query tokens. The snapshot is created with mode `0600`, but it is not encrypted; filesystem access and backups must be protected accordingly.
 
