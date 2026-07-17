@@ -4,7 +4,12 @@
 *.test
 .DS_Store
 
-# Keploy local artifacts (root config + recorded testcases; not the workflow)
+# Keploy: commit keploy/ test cases + mocks, but ignore the root config, the
+# run reports, and local build artifacts.
 /keploy.yml
-/keploy/
+/keploy/reports/
 /urlshortener
+/urlshortener.linux
+record.log
+test.log
+/.keploybin/

@@ -201,13 +201,19 @@ tidy` drift check, and `go test -race -shuffle=on ./...`; a second job runs the
 PostgreSQL store against a service container (`-tags=integration`); and a Docker
 job publishes to GHCR only on a `v*` tag.
 
-`.github/workflows/keploy.yml` runs [Keploy](https://keploy.io) API
-record/replay tests: it starts the service (in-memory store), records real HTTP
-traffic into test cases, then replays them to catch contract regressions. The
-current Keploy CLI requires authentication, so this job needs a repository
-secret **`KEPLOY_API_KEY`** (from https://app.keploy.io → API keys). Without the
-secret the job skips cleanly. Add it under *Settings → Secrets and variables →
-Actions → New repository secret*.
+`.github/workflows/keploy.yml` runs [Keploy](https://keploy.io) API tests using
+the standard record-once / replay-in-CI model. The recorded test cases **and
+mocks** are committed under `keploy/`, so CI runs only `keploy test`: the
+`mocks.yaml` stands in for PostgreSQL (13 Postgres + 2 DNS interactions), so no
+database is started. It uses the open-source Keploy binary (`install.sh --oss`),
+so **no API key is needed**.
+
+To re-record after an API change, run it locally and commit the result:
+
+```bash
+./scripts/keploy_record.sh   # records into keploy/ via Docker (Linux/eBPF)
+git add keploy/ && git commit -m "test(keploy): re-record API test cases"
+```
 
 ## Scope and next steps
 

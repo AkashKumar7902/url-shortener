@@ -1,20 +1,17 @@
 name: Keploy API Tests
 
-# Keploy records real API traffic into test cases + mocks, then replays them to
-# catch contract regressions. It uses eBPF, so it only runs on Linux runners.
+# Replays the committed Keploy test cases (keploy/) against the service. The
+# recorded mocks.yaml stands in for PostgreSQL, so CI needs no database — it
+# only runs `keploy test`. Re-record locally with scripts/keploy_record.sh when
+# the API contract changes.
 #
-# The service runs with the in-memory store (no DATABASE_URL), so there are no
-# outbound dependencies to mock — Keploy records HTTP requests/responses and
-# replays them. Codes are deterministic (base62 of an in-memory counter), so
-# replayed responses match byte-for-byte.
-#
-# NOTE: the default `install.sh | bash` routes to the enterprise installer,
-# which requires cloud login. We pass `--oss` to install the pure open-source
-# binary, which records/replays fully locally with no API key. Kept in its own
-# workflow so the required CI pipeline is unaffected.
+# Uses the open-source Keploy binary (`--oss`); no API key required. eBPF-based,
+# so Linux-only. Kept separate from the required CI pipeline.
 
 on:
   push:
+    branches: [main]
+  pull_request:
     branches: [main]
   workflow_dispatch:
 
@@ -24,7 +21,13 @@ permissions:
 jobs:
   keploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
+    env:
+      # Must match the DSN used when recording, so the app's connection matches
+      # the recorded DNS + Postgres mocks. No real database is started.
+      DATABASE_URL: "postgres://postgres@kpg:5432/postgres?sslmode=disable&pool_max_conns=1&default_query_exec_mode=simple_protocol"
+      PUBLIC_BASE_URL: "http://localhost:8080"
+      HTTP_ADDR: ":8080"
     steps:
       - uses: actions/checkout@v4
 
@@ -41,56 +44,14 @@ jobs:
           curl --silent -L https://keploy.io/install.sh | bash -s -- --oss
           keploy --version || true
 
-      - name: Record API test cases
-        env:
-          HTTP_ADDR: ":8080"
-          PUBLIC_BASE_URL: "http://localhost:8080"
+      - name: Replay recorded test cases (mocked DB)
         run: |
           set -x
-          keploy config --generate || true
-          if [ -f keploy.yml ]; then
-            sed -i 's/global: {}/global: {"header":{"Date":[]}}/' keploy.yml || true
-          fi
-
-          send_traffic() {
-            # Wait for the server to accept TCP connections (no HTTP request, so
-            # no stray test case is recorded during the wait).
-            for _ in $(seq 1 30); do
-              if (echo > /dev/tcp/localhost/8080) 2>/dev/null; then break; fi
-              sleep 1
-            done
-            sleep 2
-            curl -s -X POST -H 'Content-Type: application/json' \
-              -d '{"url":"https://example.com/one"}' http://localhost:8080/shorten
-            curl -s -X POST -H 'Content-Type: application/json' \
-              -d '{"url":"https://example.com/one"}' http://localhost:8080/shorten
-            curl -s -X POST -H 'Content-Type: application/json' \
-              -d '{"url":"https://example.com/two","custom_alias":"docs"}' http://localhost:8080/shorten
-            curl -s -o /dev/null http://localhost:8080/docs
-            curl -s -o /dev/null http://localhost:8080/missing
-            curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
-              -d '{"url":"ftp://nope"}' http://localhost:8080/shorten
-            sleep 5
-            sudo kill -INT "$(pgrep -n -f 'keploy record')" 2>/dev/null || true
-          }
-
-          send_traffic &
-          sudo -E env PATH="$PATH" HTTP_ADDR="$HTTP_ADDR" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
-            keploy record -c "./urlshortener" 2>&1 | tee record.log
-
-          echo "recorded test cases:"; ls -R keploy/ 2>/dev/null || true
-          if [ ! -d keploy ] || [ -z "$(find keploy -name '*.yaml' -print -quit 2>/dev/null)" ]; then
-            echo "::error::Keploy recorded no test cases (check record.log)"
+          if [ -z "$(find keploy -name '*.yaml' -path '*/tests/*' -print -quit 2>/dev/null)" ]; then
+            echo "::error::No committed Keploy test cases found under keploy/. Record with scripts/keploy_record.sh"
             exit 1
           fi
-
-      - name: Replay API test cases
-        env:
-          HTTP_ADDR: ":8080"
-          PUBLIC_BASE_URL: "http://localhost:8080"
-        run: |
-          set -x
-          sudo -E env PATH="$PATH" HTTP_ADDR="$HTTP_ADDR" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
+          sudo -E env PATH="$PATH" DATABASE_URL="$DATABASE_URL" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" HTTP_ADDR="$HTTP_ADDR" \
             keploy test -c "./urlshortener" --delay 10 2>&1 | tee test.log
 
           reports="$(find keploy/reports -name '*-report.yaml' 2>/dev/null)"
@@ -110,13 +71,12 @@ jobs:
           fi
           echo "All Keploy test sets passed"
 
-      - name: Upload Keploy artifacts
+      - name: Upload Keploy reports
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: keploy-results
+          name: keploy-reports
           path: |
-            keploy/
-            record.log
+            keploy/reports/
             test.log
           if-no-files-found: ignore
