@@ -39,7 +39,8 @@ for _ in $(seq 1 30); do docker exec "$PG" pg_isready -q 2>/dev/null && break; s
 echo ">> recording (privileged linux container)"
 docker run --rm --network "$NET" --privileged \
   -v "$REPO":/app -w /app \
-  -e DATABASE_URL="$DSN" -e PUBLIC_BASE_URL="http://localhost:8080" -e HTTP_ADDR=":8080" \
+  -e STORE_BACKEND="postgres" -e DATABASE_URL="$DSN" \
+  -e PUBLIC_BASE_URL="http://localhost:8080" -e HTTP_ADDR=":8080" \
   ubuntu:22.04 bash -c '
     set -e
     printf "#!/bin/sh\nexec \"\$@\"\n" > /usr/local/bin/sudo && chmod +x /usr/local/bin/sudo

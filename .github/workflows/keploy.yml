@@ -25,7 +25,8 @@ jobs:
     env:
       # Must match the DSN used when recording, so the app's connection matches
       # the recorded DNS + Postgres mocks. No real database is started.
-      DATABASE_URL: "postgres://postgres@kpg:5432/postgres?sslmode=disable&pool_max_conns=1&default_query_exec_mode=simple_protocol"
+      STORE_BACKEND: "postgres"
+      DATABASE_URL: "postgres://postgres@keploy_rec_pg:5432/postgres?sslmode=disable&pool_max_conns=1&default_query_exec_mode=simple_protocol"
       PUBLIC_BASE_URL: "http://localhost:8080"
       HTTP_ADDR: ":8080"
     steps:
@@ -51,7 +52,7 @@ jobs:
             echo "::error::No committed Keploy test cases found under keploy/. Record with scripts/keploy_record.sh"
             exit 1
           fi
-          sudo -E env PATH="$PATH" DATABASE_URL="$DATABASE_URL" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" HTTP_ADDR="$HTTP_ADDR" \
+          sudo -E env PATH="$PATH" STORE_BACKEND="$STORE_BACKEND" DATABASE_URL="$DATABASE_URL" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" HTTP_ADDR="$HTTP_ADDR" \
             keploy test -c "./urlshortener" --delay 10 2>&1 | tee test.log
 
           reports="$(find keploy/reports -name '*-report.yaml' 2>/dev/null)"

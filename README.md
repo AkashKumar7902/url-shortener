@@ -6,8 +6,9 @@ A small, modular Go service that turns long URLs into short codes and serves
 documented semantics, and is structured around interface seams so the datastore
 and code-generation strategy are swappable.
 
-- **Datastore:** PostgreSQL in production (a `UNIQUE` constraint owns
-  uniqueness); an in-memory store for tests and zero-dependency local runs.
+- **Datastore:** PostgreSQL in production (a fixed-width SHA-256 `UNIQUE` index
+  owns exact-URL uniqueness); an explicitly selected in-memory store for tests
+  and zero-dependency local runs.
 - **Codes:** short, URL-safe **base62** of a database sequence id, allocated in
   **blocks** to amortise round trips; optionally Feistel-permuted for opacity.
 
@@ -18,16 +19,22 @@ Requirements: Go 1.25+ (built with 1.26).
 **Zero dependencies (in-memory store):**
 
 ```bash
-go run ./cmd/urlshortener
+STORE_BACKEND=memory go run ./cmd/urlshortener
+# or: make run
 # listening on http://localhost:8080, store=memory
 ```
+
+Memory mode is process-local and non-durable, so it must be selected explicitly.
+The service never falls back to it when production configuration is missing.
 
 **With PostgreSQL (production path):**
 
 ```bash
 docker compose up --build     # app + postgres
 # or point at your own database:
-DATABASE_URL="postgres://user:pass@host:5432/db" go run ./cmd/urlshortener
+STORE_BACKEND=postgres \
+DATABASE_URL="postgres://user:pass@host:5432/db" \
+go run ./cmd/urlshortener
 ```
 
 Create and follow a short link:
@@ -114,7 +121,10 @@ URL returns its existing generated code (`200`). Equality is byte-for-byte —
 scheme/host casing, trailing slash, query ordering, escaping, and fragments are
 **not** canonicalized, because rewriting them can change signed URLs or
 application semantics. Equivalent spellings may therefore receive different
-codes.
+codes. PostgreSQL indexes a stored 32-byte SHA-256 digest instead of the full
+URL, then verifies the retrieved URL exactly. This keeps the B-tree entry fixed
+size for accepted URLs up to 8 KiB without allowing a theoretical digest
+collision to return another URL's mapping.
 
 ### Custom aliases
 
@@ -166,7 +176,7 @@ internal/
   shortener/           domain: Service, validation, Store port, CodeGenerator,
                        IDAllocator, Codec, typed errors
   store/memory/        in-process Store (tests, local)
-  store/postgres/      PostgreSQL Store + block allocator + idempotent schema
+  store/postgres/      PostgreSQL Store + block allocator + serialized bootstrap migrations
   httpapi/             transport: routing, strict decode, error→status mapping
   config/              env → typed Config
   platform/            Clock, Logger adapters
@@ -186,13 +196,22 @@ Every axis of likely change is an interface, so it can be swapped in one place:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
+| `STORE_BACKEND` | _(required)_ | `memory` (explicitly non-durable) or `postgres`. |
 | `HTTP_ADDR` | `:8080` | Listen address. |
 | `PUBLIC_BASE_URL` | `http://localhost:8080` | Trusted origin for `short_url`; request `Host` is never trusted. |
-| `DATABASE_URL` | _(empty)_ | If set, use PostgreSQL; otherwise the in-memory store. |
+| `DATABASE_URL` | _(empty)_ | Required with `STORE_BACKEND=postgres`; rejected with `memory`. |
 | `BLOCK_SIZE` | `100` | Sequence ids fetched per round trip (Option A). |
 | `CODE_OFFSET` | `1000000000` | Starting id for the in-memory allocator (keeps codes ~6 chars). |
 | `MAX_RETRIES` | `4` | Bound on the generated-code retry loop. |
 | `FEISTEL_KEY` | `0` | If non-zero, generated codes are Feistel-permuted (opaque, non-sequential). |
+
+On PostgreSQL startup, schema bootstrap is serialized with an advisory lock and
+applied transactionally. Existing databases are upgraded from the original
+full-URL unique index to a database-generated SHA-256 column; the replacement
+keeps the original index name so older binaries cannot recreate the unsafe
+full-URL index during a rolling deployment. Adding the stored column and index
+is a blocking migration, so schedule a maintenance window when upgrading a
+large existing `links` table.
 
 ## Continuous integration
 

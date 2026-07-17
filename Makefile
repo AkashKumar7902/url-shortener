@@ -1,5 +1,7 @@
 .PHONY: check fmt vet test test-race run build tidy
 
+STORE_BACKEND ?= memory
+
 check: fmt vet test-race
 
 fmt:
@@ -15,7 +17,7 @@ test-race:
 	go test -race -shuffle=on ./...
 
 run:
-	go run ./cmd/urlshortener
+	STORE_BACKEND=$(STORE_BACKEND) go run ./cmd/urlshortener
 
 build:
 	go build -o bin/urlshortener ./cmd/urlshortener

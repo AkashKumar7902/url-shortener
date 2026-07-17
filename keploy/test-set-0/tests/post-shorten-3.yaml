@@ -16,31 +16,31 @@ spec:
       Host: localhost:8080
       User-Agent: curl/7.81.0
     body: '{"url":"https://example.com/two","custom_alias":"docs"}'
-    timestamp: 2026-07-17T08:31:28.024309671Z
+    timestamp: 2026-07-17T09:10:53.463632129Z
   resp:
     status_code: 201
     header:
       Content-Length: "113"
       Content-Type: application/json; charset=utf-8
-      Date: Fri, 17 Jul 2026 08:31:28 GMT
+      Date: Fri, 17 Jul 2026 09:10:53 GMT
       Location: http://localhost:8080/docs
     body: |
       {"code":"docs","short_url":"http://localhost:8080/docs","original_url":"https://example.com/two","created":true}
     status_message: Created
     proto_major: 0
     proto_minor: 0
-    timestamp: 2026-07-17T08:31:28.024984671Z
+    timestamp: 2026-07-17T09:10:53.464313546Z
   objects: []
   assertions:
     noise:
       header.Date: []
-  created: 1784277088
+  created: 1784279453
   app_port: 8080
 curl: |-
   curl --request POST \
     --url http://localhost:8080/shorten \
-    --header 'Accept: */*' \
     --header 'Content-Type: application/json' \
     --header 'Host: localhost:8080' \
     --header 'User-Agent: curl/7.81.0' \
+    --header 'Accept: */*' \
     --data "{\"url\":\"https://example.com/two\",\"custom_alias\":\"docs\"}"

@@ -14,25 +14,25 @@ spec:
       Host: localhost:8080
       User-Agent: curl/7.81.0
     body: ""
-    timestamp: 2026-07-17T08:31:28.031288254Z
+    timestamp: 2026-07-17T09:10:53.470515338Z
   resp:
     status_code: 404
     header:
       Cache-Control: no-store
       Content-Length: "64"
       Content-Type: application/json; charset=utf-8
-      Date: Fri, 17 Jul 2026 08:31:28 GMT
+      Date: Fri, 17 Jul 2026 09:10:53 GMT
     body: |
       {"error":{"code":"not_found","message":"short code not found"}}
     status_message: Not Found
     proto_major: 0
     proto_minor: 0
-    timestamp: 2026-07-17T08:31:28.031719171Z
+    timestamp: 2026-07-17T09:10:53.470968171Z
   objects: []
   assertions:
     noise:
       header.Date: []
-  created: 1784277088
+  created: 1784279453
   app_port: 8080
 curl: |
   curl --request GET \

@@ -5,30 +5,10 @@ name: mock-0
 spec:
     metadata:
         name: DNS
-        qtype: AAAA
-        type: config
-    request:
-        name: kpg.
-        qtype: 28
-        qclass: 1
-    response:
-        rcode: 0
-        authoritative: false
-        recursionAvailable: true
-        truncated: false
-    reqTimestampMock: 2026-07-17T08:31:25.021141961Z
-    resTimestampMock: 2026-07-17T08:31:25.022129378Z
----
-version: api.keploy.io/v1beta1
-kind: DNS
-name: mock-1
-spec:
-    metadata:
-        name: DNS
         qtype: A
         type: config
     request:
-        name: kpg.
+        name: keploy_rec_pg.
         qtype: 1
         qclass: 1
     response:
@@ -37,9 +17,29 @@ spec:
         recursionAvailable: true
         truncated: false
         answers:
-            - "kpg.\t600\tIN\tA\t172.19.0.2"
-    reqTimestampMock: 2026-07-17T08:31:25.021140669Z
-    resTimestampMock: 2026-07-17T08:31:25.022194128Z
+            - "keploy_rec_pg.\t600\tIN\tA\t172.20.0.2"
+    reqTimestampMock: 2026-07-17T09:10:50.472261836Z
+    resTimestampMock: 2026-07-17T09:10:50.47270517Z
+---
+version: api.keploy.io/v1beta1
+kind: DNS
+name: mock-1
+spec:
+    metadata:
+        name: DNS
+        qtype: AAAA
+        type: config
+    request:
+        name: keploy_rec_pg.
+        qtype: 28
+        qclass: 1
+    response:
+        rcode: 0
+        authoritative: false
+        recursionAvailable: true
+        truncated: false
+    reqTimestampMock: 2026-07-17T09:10:50.472262253Z
+    resTimestampMock: 2026-07-17T09:10:50.472760295Z
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
@@ -70,10 +70,10 @@ spec:
                 session_authorization: postgres
                 standard_conforming_strings: "on"
             backendProcessID: 80
-            backendSecretKey: 572684640
+            backendSecretKey: 440755204
             observedAuthMode: trust
-    reqTimestampMock: 2026-07-17T08:31:25.023394128Z
-    resTimestampMock: 2026-07-17T08:31:25.029458628Z
+    reqTimestampMock: 2026-07-17T09:10:50.473755336Z
+    resTimestampMock: 2026-07-17T09:10:50.477314378Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
@@ -92,12 +92,12 @@ spec:
             lifetime: session
             sqlAstHash: sha256:a66bf255653587dd476dfd0524632134bc0623f293ee93d2bf2666447cd2b4d1
             sqlNormalized: -- ping
-            invocationId: sha256:a66bf255653587dd476dfd0524632134bc0623f293ee93d2bf2666447cd2b4d1:0:2026-07-17T08:31:25.029600586Z:1
+            invocationId: sha256:a66bf255653587dd476dfd0524632134bc0623f293ee93d2bf2666447cd2b4d1:0:2026-07-17T09:10:50.477519836Z:1
             precedingTxState: idle
             response: {}
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:25.029600586Z
-    resTimestampMock: 2026-07-17T08:31:25.030518169Z
+    reqTimestampMock: 2026-07-17T09:10:50.477519836Z
+    resTimestampMock: 2026-07-17T09:10:50.477650461Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
@@ -105,24 +105,24 @@ kind: PostgresV3
 name: mock-4
 spec:
     metadata:
-        class: DDL
+        class: TX
         connID: "0"
         lifetime: session
         type: config
     postgresV3:
         type: query
         query:
-            class: DDL
+            class: TX
             lifetime: session
-            sqlAstHash: sha256:b08e6ff70d9840a43733f7b3af03dccc72931f1d1142214ee85944c4ed07ab37
-            sqlNormalized: CREATE SEQUENCE IF NOT EXISTS links_code_seq START 1000000000
-            invocationId: sha256:b08e6ff70d9840a43733f7b3af03dccc72931f1d1142214ee85944c4ed07ab37:0:2026-07-17T08:31:25.030668128Z:2
+            sqlAstHash: sha256:83b556f1ffe78c1283dfa0a60cb7a032029891447cb14af2bb30a4e13b08e2e8
+            sqlNormalized: begin
+            invocationId: sha256:83b556f1ffe78c1283dfa0a60cb7a032029891447cb14af2bb30a4e13b08e2e8:0:2026-07-17T09:10:50.477703336Z:2
             precedingTxState: idle
             response:
-                commandComplete: CREATE SEQUENCE
+                commandComplete: BEGIN
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:25.030668128Z
-    resTimestampMock: 2026-07-17T08:31:25.039794086Z
+    reqTimestampMock: 2026-07-17T09:10:50.477703336Z
+    resTimestampMock: 2026-07-17T09:10:50.477828003Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
@@ -130,24 +130,36 @@ kind: PostgresV3
 name: mock-5
 spec:
     metadata:
-        class: DDL
+        class: LOCK
         connID: "0"
         lifetime: session
         type: config
     postgresV3:
         type: query
         query:
-            class: DDL
+            class: LOCK
             lifetime: session
-            sqlAstHash: sha256:038aa4906013b8f51b71acfb6c8b108490a67ac26adc8b8813804bee8188de1a
-            sqlNormalized: "CREATE TABLE IF NOT EXISTS links (\n    code       TEXT        PRIMARY KEY,\n    url        TEXT        NOT NULL,\n    kind       TEXT        NOT NULL CHECK (kind IN ('generated','custom')),\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now()\n)"
-            invocationId: sha256:038aa4906013b8f51b71acfb6c8b108490a67ac26adc8b8813804bee8188de1a:0:2026-07-17T08:31:25.030668128Z:3
-            precedingTxState: idle
+            sqlAstHash: sha256:6960e288eab4ce9d71ab476265237ee4346836d16cfc5a218314024c1b264c8d
+            sqlNormalized: SELECT pg_advisory_xact_lock( $1 )
+            invocationId: sha256:6960e288eab4ce9d71ab476265237ee4346836d16cfc5a218314024c1b264c8d:0:2026-07-17T09:10:50.477883545Z:3
+            precedingTxState: in_tx
+            bindValues:
+                - !!binary NzkwMjAyNTA3MTcwMQ==
+            bindFormats:
+                - 0
             response:
-                commandComplete: CREATE TABLE
+                rowDescription:
+                    - name: pg_advisory_xact_lock
+                      typeOid: 2278
+                      typeSize: 4
+                      typeMod: -1
+                rows:
+                    - - format: 0
+                        bytes: []
+                commandComplete: SELECT 1
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:25.030668128Z
-    resTimestampMock: 2026-07-17T08:31:25.039794086Z
+    reqTimestampMock: 2026-07-17T09:10:50.477883545Z
+    resTimestampMock: 2026-07-17T09:10:50.478263586Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
@@ -164,20 +176,195 @@ spec:
         query:
             class: DDL
             lifetime: session
-            sqlAstHash: sha256:b6c700abab593480ee0dc1fd9b86c5c04a5c01a26bb03893d0c824dc3dec3f3f
-            sqlNormalized: CREATE UNIQUE INDEX IF NOT EXISTS uq_generated_url ON links (url) WHERE kind = 'generated'
-            invocationId: sha256:b6c700abab593480ee0dc1fd9b86c5c04a5c01a26bb03893d0c824dc3dec3f3f:0:2026-07-17T08:31:25.030668128Z:4
-            precedingTxState: idle
+            sqlAstHash: sha256:b08e6ff70d9840a43733f7b3af03dccc72931f1d1142214ee85944c4ed07ab37
+            sqlNormalized: CREATE SEQUENCE IF NOT EXISTS links_code_seq START 1000000000
+            invocationId: sha256:b08e6ff70d9840a43733f7b3af03dccc72931f1d1142214ee85944c4ed07ab37:0:2026-07-17T09:10:50.478309628Z:4
+            precedingTxState: in_tx
             response:
-                commandComplete: CREATE INDEX
+                commandComplete: CREATE SEQUENCE
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:25.030668128Z
-    resTimestampMock: 2026-07-17T08:31:25.039794086Z
+    reqTimestampMock: 2026-07-17T09:10:50.478309628Z
+    resTimestampMock: 2026-07-17T09:10:50.47900217Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
 name: mock-7
+spec:
+    metadata:
+        class: DDL
+        connID: "0"
+        lifetime: session
+        type: config
+    postgresV3:
+        type: query
+        query:
+            class: DDL
+            lifetime: session
+            sqlAstHash: sha256:2cb20c678d0a23647f9da0c0a64d8c6460d905dfd39885b54cca036e6a1ab125
+            sqlNormalized: "CREATE TABLE IF NOT EXISTS links (\n    code       TEXT        PRIMARY KEY,\n    url        TEXT        NOT NULL,\n    url_sha256 BYTEA       GENERATED ALWAYS AS (sha256(url::bytea)) STORED,\n    kind       TEXT        NOT NULL CHECK (kind IN ('generated','custom')),\n    created_at TIMESTAMPTZ NOT NULL DEFAULT now()\n)"
+            invocationId: sha256:2cb20c678d0a23647f9da0c0a64d8c6460d905dfd39885b54cca036e6a1ab125:0:2026-07-17T09:10:50.479655211Z:5
+            precedingTxState: in_tx
+            response:
+                commandComplete: CREATE TABLE
+            sideEffects: {}
+    reqTimestampMock: 2026-07-17T09:10:50.479655211Z
+    resTimestampMock: 2026-07-17T09:10:50.490381503Z
+connectionId: "0"
+---
+version: api.keploy.io/v1beta1
+kind: PostgresV3
+name: mock-8
+spec:
+    metadata:
+        class: DDL
+        connID: "0"
+        lifetime: session
+        type: config
+    postgresV3:
+        type: query
+        query:
+            class: DDL
+            lifetime: session
+            sqlAstHash: sha256:010fbf84cc498b5a53189a575e87ef1df149bac4f53a6df7a46e6678e8adfd9d
+            sqlNormalized: "ALTER TABLE links\n    ADD COLUMN IF NOT EXISTS url_sha256 BYTEA\n    GENERATED ALWAYS AS (sha256(url::bytea)) STORED"
+            invocationId: sha256:010fbf84cc498b5a53189a575e87ef1df149bac4f53a6df7a46e6678e8adfd9d:0:2026-07-17T09:10:50.490438253Z:6
+            precedingTxState: in_tx
+            response:
+                commandComplete: ALTER TABLE
+            sideEffects: {}
+    reqTimestampMock: 2026-07-17T09:10:50.490438253Z
+    resTimestampMock: 2026-07-17T09:10:50.490567545Z
+connectionId: "0"
+---
+version: api.keploy.io/v1beta1
+kind: PostgresV3
+name: mock-9
+spec:
+    metadata:
+        class: DDL
+        connID: "0"
+        lifetime: session
+        type: config
+    postgresV3:
+        type: query
+        query:
+            class: DDL
+            lifetime: session
+            sqlAstHash: sha256:96699cae325473525e7197280c43fc5cd0eaa8de87c0b6cf782ae17e8add05db
+            sqlNormalized: ALTER TABLE links ALTER COLUMN url_sha256 SET NOT NULL
+            invocationId: sha256:96699cae325473525e7197280c43fc5cd0eaa8de87c0b6cf782ae17e8add05db:0:2026-07-17T09:10:50.490603253Z:7
+            precedingTxState: in_tx
+            response:
+                commandComplete: ALTER TABLE
+            sideEffects: {}
+    reqTimestampMock: 2026-07-17T09:10:50.490603253Z
+    resTimestampMock: 2026-07-17T09:10:50.490728795Z
+connectionId: "0"
+---
+version: api.keploy.io/v1beta1
+kind: PostgresV3
+name: mock-10
+spec:
+    metadata:
+        class: APP
+        connID: "0"
+        lifetime: perTest
+        type: mocks
+    postgresV3:
+        type: query
+        query:
+            class: APP
+            lifetime: perTest
+            sqlAstHash: sha256:e641590f6773f59b4ac266a2f67ca18bbb0ef34c14cc03e52aaea632cbf195b2
+            sqlNormalized: DO $1
+            invocationId: sha256:e641590f6773f59b4ac266a2f67ca18bbb0ef34c14cc03e52aaea632cbf195b2:0:2026-07-17T09:10:50.490796086Z:8
+            precedingTxState: in_tx
+            response:
+                commandComplete: DO
+            sideEffects: {}
+    reqTimestampMock: 2026-07-17T09:10:50.490796086Z
+    resTimestampMock: 2026-07-17T09:10:50.491714503Z
+connectionId: "0"
+---
+version: api.keploy.io/v1beta1
+kind: PostgresV3
+name: mock-11
+spec:
+    metadata:
+        class: DDL
+        connID: "0"
+        lifetime: session
+        type: config
+    postgresV3:
+        type: query
+        query:
+            class: DDL
+            lifetime: session
+            sqlAstHash: sha256:c062bbdfa2266401f2e26d4161d441bf13308dec2bb9da9fc12f87d89231e951
+            sqlNormalized: DROP INDEX IF EXISTS uq_generated_url_sha256_migration
+            invocationId: sha256:c062bbdfa2266401f2e26d4161d441bf13308dec2bb9da9fc12f87d89231e951:0:2026-07-17T09:10:50.491766836Z:9
+            precedingTxState: in_tx
+            response:
+                commandComplete: DROP INDEX
+            sideEffects: {}
+    reqTimestampMock: 2026-07-17T09:10:50.491766836Z
+    resTimestampMock: 2026-07-17T09:10:50.491844628Z
+connectionId: "0"
+---
+version: api.keploy.io/v1beta1
+kind: PostgresV3
+name: mock-12
+spec:
+    metadata:
+        class: APP
+        connID: "0"
+        lifetime: perTest
+        type: mocks
+    postgresV3:
+        type: query
+        query:
+            class: APP
+            lifetime: perTest
+            sqlAstHash: sha256:e641590f6773f59b4ac266a2f67ca18bbb0ef34c14cc03e52aaea632cbf195b2
+            sqlNormalized: DO $1
+            invocationId: sha256:e641590f6773f59b4ac266a2f67ca18bbb0ef34c14cc03e52aaea632cbf195b2:0:2026-07-17T09:10:50.491882795Z:10
+            precedingTxState: in_tx
+            response:
+                commandComplete: DO
+            sideEffects: {}
+    reqTimestampMock: 2026-07-17T09:10:50.491882795Z
+    resTimestampMock: 2026-07-17T09:10:50.492722586Z
+connectionId: "0"
+---
+version: api.keploy.io/v1beta1
+kind: PostgresV3
+name: mock-13
+spec:
+    metadata:
+        class: TX
+        connID: "0"
+        lifetime: session
+        type: config
+    postgresV3:
+        type: query
+        query:
+            class: TX
+            lifetime: session
+            sqlAstHash: sha256:cd3c36208f26fbef67b62d1116148a76e1eee8b227747c2256be5d249d69a439
+            sqlNormalized: commit
+            invocationId: sha256:cd3c36208f26fbef67b62d1116148a76e1eee8b227747c2256be5d249d69a439:0:2026-07-17T09:10:50.49277317Z:11
+            precedingTxState: in_tx
+            response:
+                commandComplete: COMMIT
+            sideEffects: {}
+    reqTimestampMock: 2026-07-17T09:10:50.49277317Z
+    resTimestampMock: 2026-07-17T09:10:50.49303092Z
+connectionId: "0"
+---
+version: api.keploy.io/v1beta1
+kind: PostgresV3
+name: mock-14
 spec:
     metadata:
         class: VALIDATION
@@ -191,17 +378,17 @@ spec:
             lifetime: session
             sqlAstHash: sha256:a66bf255653587dd476dfd0524632134bc0623f293ee93d2bf2666447cd2b4d1
             sqlNormalized: -- ping
-            invocationId: sha256:a66bf255653587dd476dfd0524632134bc0623f293ee93d2bf2666447cd2b4d1:0:2026-07-17T08:31:28.002024504Z:5
+            invocationId: sha256:a66bf255653587dd476dfd0524632134bc0623f293ee93d2bf2666447cd2b4d1:0:2026-07-17T09:10:53.453635254Z:12
             precedingTxState: idle
             response: {}
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:28.002024504Z
-    resTimestampMock: 2026-07-17T08:31:28.002935129Z
+    reqTimestampMock: 2026-07-17T09:10:53.453635254Z
+    resTimestampMock: 2026-07-17T09:10:53.453847713Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
-name: mock-8
+name: mock-15
 spec:
     metadata:
         class: APP
@@ -213,9 +400,9 @@ spec:
         query:
             class: APP
             lifetime: perTest
-            sqlAstHash: sha256:a3838aca8bcffe558b02a107a56c31377456cd300f80ad0451b4b3988d0eb64b
-            sqlNormalized: SELECT code, url, kind, created_at FROM links WHERE url =  $1  AND kind = $2
-            invocationId: sha256:a3838aca8bcffe558b02a107a56c31377456cd300f80ad0451b4b3988d0eb64b:0:2026-07-17T08:31:28.003074213Z:6
+            sqlAstHash: sha256:46581039d0470276eb2fdfb862ca856a262432546a35390978acd1858f0b8f6a
+            sqlNormalized: "SELECT code, url, kind, created_at FROM links\n\t\t WHERE url_sha256 = sha256( $1 ::text::bytea) AND kind = $2"
+            invocationId: sha256:46581039d0470276eb2fdfb862ca856a262432546a35390978acd1858f0b8f6a:0:2026-07-17T09:10:53.454518546Z:13
             precedingTxState: idle
             bindValues:
                 - !!binary aHR0cHM6Ly9leGFtcGxlLmNvbS9vbmU=
@@ -239,25 +426,25 @@ spec:
                       typeMod: -1
                     - name: kind
                       tableOid: 16385
-                      colAttrNum: 3
+                      colAttrNum: 4
                       typeOid: 25
                       typeSize: -1
                       typeMod: -1
                     - name: created_at
                       tableOid: 16385
-                      colAttrNum: 4
+                      colAttrNum: 5
                       typeOid: 1184
                       typeSize: 8
                       typeMod: -1
                 commandComplete: SELECT 0
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:28.003074213Z
-    resTimestampMock: 2026-07-17T08:31:28.004911963Z
+    reqTimestampMock: 2026-07-17T09:10:53.454518546Z
+    resTimestampMock: 2026-07-17T09:10:53.455238796Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
-name: mock-9
+name: mock-16
 spec:
     metadata:
         class: APP
@@ -271,7 +458,7 @@ spec:
             lifetime: perTest
             sqlAstHash: sha256:23d97004b71f5c53522585293ebe9ad00314e190702906c8a5558931f4eebcef
             sqlNormalized: SELECT nextval($1) FROM generate_series($2,  $3 )
-            invocationId: sha256:23d97004b71f5c53522585293ebe9ad00314e190702906c8a5558931f4eebcef:0:2026-07-17T08:31:28.005293421Z:7
+            invocationId: sha256:23d97004b71f5c53522585293ebe9ad00314e190702906c8a5558931f4eebcef:0:2026-07-17T09:10:53.455371463Z:14
             precedingTxState: idle
             bindValues:
                 - !!binary bGlua3NfY29kZV9zZXE=
@@ -390,13 +577,13 @@ spec:
                     - - 1000000099
                 commandComplete: SELECT 100
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:28.005293421Z
-    resTimestampMock: 2026-07-17T08:31:28.013021379Z
+    reqTimestampMock: 2026-07-17T09:10:53.455371463Z
+    resTimestampMock: 2026-07-17T09:10:53.455898671Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
-name: mock-10
+name: mock-17
 spec:
     metadata:
         class: APP
@@ -410,13 +597,13 @@ spec:
             lifetime: perTest
             sqlAstHash: sha256:8aa1ee6b6d75e115d29eaad2f3545c99175ba91890ffb81dbded83c0d33878a1
             sqlNormalized: "INSERT INTO links (code, url, kind, created_at)\n\t\t VALUES ( $1 ,  $2 ,  $3 ,  $4 )\n\t\t ON CONFLICT DO NOTHING"
-            invocationId: sha256:8aa1ee6b6d75e115d29eaad2f3545c99175ba91890ffb81dbded83c0d33878a1:0:2026-07-17T08:31:28.013428046Z:8
+            invocationId: sha256:8aa1ee6b6d75e115d29eaad2f3545c99175ba91890ffb81dbded83c0d33878a1:0:2026-07-17T09:10:53.455994713Z:15
             precedingTxState: idle
             bindValues:
                 - !!binary MTVmdGdH
                 - !!binary aHR0cHM6Ly9leGFtcGxlLmNvbS9vbmU=
                 - !!binary Z2VuZXJhdGVk
-                - !!binary MjAyNi0wNy0xNyAwODozMToyOC4wMTMwOTda
+                - !!binary MjAyNi0wNy0xNyAwOToxMDo1My40NTU5NDla
             bindFormats:
                 - 0
                 - 0
@@ -425,13 +612,13 @@ spec:
             response:
                 commandComplete: INSERT 0 1
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:28.013428046Z
-    resTimestampMock: 2026-07-17T08:31:28.014294921Z
+    reqTimestampMock: 2026-07-17T09:10:53.455994713Z
+    resTimestampMock: 2026-07-17T09:10:53.456523504Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
-name: mock-11
+name: mock-18
 spec:
     metadata:
         class: APP
@@ -443,9 +630,9 @@ spec:
         query:
             class: APP
             lifetime: perTest
-            sqlAstHash: sha256:a3838aca8bcffe558b02a107a56c31377456cd300f80ad0451b4b3988d0eb64b
-            sqlNormalized: SELECT code, url, kind, created_at FROM links WHERE url =  $1  AND kind = $2
-            invocationId: sha256:a3838aca8bcffe558b02a107a56c31377456cd300f80ad0451b4b3988d0eb64b:0:2026-07-17T08:31:28.020227504Z:9
+            sqlAstHash: sha256:46581039d0470276eb2fdfb862ca856a262432546a35390978acd1858f0b8f6a
+            sqlNormalized: "SELECT code, url, kind, created_at FROM links\n\t\t WHERE url_sha256 = sha256( $1 ::text::bytea) AND kind = $2"
+            invocationId: sha256:46581039d0470276eb2fdfb862ca856a262432546a35390978acd1858f0b8f6a:0:2026-07-17T09:10:53.460394963Z:16
             precedingTxState: idle
             bindValues:
                 - !!binary aHR0cHM6Ly9leGFtcGxlLmNvbS9vbmU=
@@ -469,13 +656,13 @@ spec:
                       typeMod: -1
                     - name: kind
                       tableOid: 16385
-                      colAttrNum: 3
+                      colAttrNum: 4
                       typeOid: 25
                       typeSize: -1
                       typeMod: -1
                     - name: created_at
                       tableOid: 16385
-                      colAttrNum: 4
+                      colAttrNum: 5
                       typeOid: 1184
                       typeSize: 8
                       typeMod: -1
@@ -483,16 +670,16 @@ spec:
                     - - 15ftgG
                       - https://example.com/one
                       - generated
-                      - 2026-07-17T08:31:28.013097Z
+                      - 2026-07-17T09:10:53.455949Z
                 commandComplete: SELECT 1
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:28.020227504Z
-    resTimestampMock: 2026-07-17T08:31:28.020498588Z
+    reqTimestampMock: 2026-07-17T09:10:53.460394963Z
+    resTimestampMock: 2026-07-17T09:10:53.460598379Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
-name: mock-12
+name: mock-19
 spec:
     metadata:
         class: APP
@@ -506,13 +693,13 @@ spec:
             lifetime: perTest
             sqlAstHash: sha256:8aa1ee6b6d75e115d29eaad2f3545c99175ba91890ffb81dbded83c0d33878a1
             sqlNormalized: "INSERT INTO links (code, url, kind, created_at)\n\t\t VALUES ( $1 ,  $2 ,  $3 ,  $4 )\n\t\t ON CONFLICT DO NOTHING"
-            invocationId: sha256:8aa1ee6b6d75e115d29eaad2f3545c99175ba91890ffb81dbded83c0d33878a1:0:2026-07-17T08:31:28.024430421Z:10
+            invocationId: sha256:8aa1ee6b6d75e115d29eaad2f3545c99175ba91890ffb81dbded83c0d33878a1:0:2026-07-17T09:10:53.463819754Z:17
             precedingTxState: idle
             bindValues:
                 - !!binary ZG9jcw==
                 - !!binary aHR0cHM6Ly9leGFtcGxlLmNvbS90d28=
                 - !!binary Y3VzdG9t
-                - !!binary MjAyNi0wNy0xNyAwODozMToyOC4wMjQzNzVa
+                - !!binary MjAyNi0wNy0xNyAwOToxMDo1My40NjM3NjVa
             bindFormats:
                 - 0
                 - 0
@@ -521,13 +708,13 @@ spec:
             response:
                 commandComplete: INSERT 0 1
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:28.024430421Z
-    resTimestampMock: 2026-07-17T08:31:28.024808046Z
+    reqTimestampMock: 2026-07-17T09:10:53.463819754Z
+    resTimestampMock: 2026-07-17T09:10:53.464196879Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
-name: mock-13
+name: mock-20
 spec:
     metadata:
         class: APP
@@ -541,7 +728,7 @@ spec:
             lifetime: perTest
             sqlAstHash: sha256:195f0ae45f22c1546354f426277529be429558acdee2f4a7a391cea50ca4b4e6
             sqlNormalized: "SELECT code, url, kind, created_at FROM links WHERE code =  $1 "
-            invocationId: sha256:195f0ae45f22c1546354f426277529be429558acdee2f4a7a391cea50ca4b4e6:0:2026-07-17T08:31:28.028053379Z:11
+            invocationId: sha256:195f0ae45f22c1546354f426277529be429558acdee2f4a7a391cea50ca4b4e6:0:2026-07-17T09:10:53.467252546Z:18
             precedingTxState: idle
             bindValues:
                 - !!binary ZG9jcw==
@@ -563,13 +750,13 @@ spec:
                       typeMod: -1
                     - name: kind
                       tableOid: 16385
-                      colAttrNum: 3
+                      colAttrNum: 4
                       typeOid: 25
                       typeSize: -1
                       typeMod: -1
                     - name: created_at
                       tableOid: 16385
-                      colAttrNum: 4
+                      colAttrNum: 5
                       typeOid: 1184
                       typeSize: 8
                       typeMod: -1
@@ -577,16 +764,16 @@ spec:
                     - - docs
                       - https://example.com/two
                       - custom
-                      - 2026-07-17T08:31:28.024375Z
+                      - 2026-07-17T09:10:53.463765Z
                 commandComplete: SELECT 1
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:28.028053379Z
-    resTimestampMock: 2026-07-17T08:31:28.028215379Z
+    reqTimestampMock: 2026-07-17T09:10:53.467252546Z
+    resTimestampMock: 2026-07-17T09:10:53.467418629Z
 connectionId: "0"
 ---
 version: api.keploy.io/v1beta1
 kind: PostgresV3
-name: mock-14
+name: mock-21
 spec:
     metadata:
         class: APP
@@ -600,7 +787,7 @@ spec:
             lifetime: perTest
             sqlAstHash: sha256:195f0ae45f22c1546354f426277529be429558acdee2f4a7a391cea50ca4b4e6
             sqlNormalized: "SELECT code, url, kind, created_at FROM links WHERE code =  $1 "
-            invocationId: sha256:195f0ae45f22c1546354f426277529be429558acdee2f4a7a391cea50ca4b4e6:0:2026-07-17T08:31:28.031389879Z:12
+            invocationId: sha256:195f0ae45f22c1546354f426277529be429558acdee2f4a7a391cea50ca4b4e6:0:2026-07-17T09:10:53.470605796Z:19
             precedingTxState: idle
             bindValues:
                 - !!binary bWlzc2luZw==
@@ -622,18 +809,18 @@ spec:
                       typeMod: -1
                     - name: kind
                       tableOid: 16385
-                      colAttrNum: 3
+                      colAttrNum: 4
                       typeOid: 25
                       typeSize: -1
                       typeMod: -1
                     - name: created_at
                       tableOid: 16385
-                      colAttrNum: 4
+                      colAttrNum: 5
                       typeOid: 1184
                       typeSize: 8
                       typeMod: -1
                 commandComplete: SELECT 0
             sideEffects: {}
-    reqTimestampMock: 2026-07-17T08:31:28.031389879Z
-    resTimestampMock: 2026-07-17T08:31:28.031543504Z
+    reqTimestampMock: 2026-07-17T09:10:53.470605796Z
+    resTimestampMock: 2026-07-17T09:10:53.470748504Z
 connectionId: "0"
