@@ -3,391 +3,198 @@ package shortener_test
 import (
 	"context"
 	"errors"
-	"fmt"
-	"path/filepath"
 	"sync"
-	"sync/atomic"
 	"testing"
+	"time"
 
-	"github.com/meakash7902/url-shortener/internal/shortener"
-	filestore "github.com/meakash7902/url-shortener/internal/store/file"
+	"github.com/AkashKumar7902/url-shortener/internal/shortener"
+	"github.com/AkashKumar7902/url-shortener/internal/store/memory"
 )
 
-func TestGeneratedShorteningIsIdempotent(t *testing.T) {
-	store := openTestStore(t)
-	generator := &scriptedGenerator{codes: []string{"first_generated"}}
-	service := shortener.NewService(store, generator)
+type fixedClock struct{}
 
-	first, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://example.com/a"})
-	if err != nil {
-		t.Fatalf("first Shorten() error = %v", err)
-	}
-	second, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://example.com/a"})
-	if err != nil {
-		t.Fatalf("second Shorten() error = %v", err)
-	}
+func (fixedClock) Now() time.Time { return time.Unix(0, 0).UTC() }
 
-	if !first.Created || second.Created {
-		t.Fatalf("created flags = (%v, %v); want (true, false)", first.Created, second.Created)
-	}
-	if first.Link.Code != second.Link.Code {
-		t.Fatalf("duplicate URL returned codes %q and %q", first.Link.Code, second.Link.Code)
-	}
-	if calls := generator.Calls(); calls != 1 {
-		t.Fatalf("generator calls = %d; want 1", calls)
-	}
-}
+type nopLogger struct{}
 
-func TestCustomAliasPolicies(t *testing.T) {
-	store := openTestStore(t)
-	service := shortener.NewService(store, staticGenerator{code: "unused"})
-	ctx := context.Background()
-	alias := "docs"
+func (nopLogger) Info(string, ...any)  {}
+func (nopLogger) Error(string, ...any) {}
 
-	first, err := service.Shorten(ctx, shortener.ShortenRequest{URL: "https://example.com/docs", CustomAlias: &alias})
-	if err != nil || !first.Created {
-		t.Fatalf("first custom Shorten() = %+v, %v; want created result", first, err)
-	}
-	retry, err := service.Shorten(ctx, shortener.ShortenRequest{URL: "https://example.com/docs", CustomAlias: &alias})
-	if err != nil || retry.Created {
-		t.Fatalf("custom retry = %+v, %v; want existing result", retry, err)
-	}
-
-	secondAlias := "documentation"
-	additional, err := service.Shorten(ctx, shortener.ShortenRequest{URL: "https://example.com/docs", CustomAlias: &secondAlias})
-	if err != nil || !additional.Created {
-		t.Fatalf("additional alias = %+v, %v; want created result", additional, err)
-	}
-
-	_, err = service.Shorten(ctx, shortener.ShortenRequest{URL: "https://other.example/docs", CustomAlias: &alias})
-	if !errors.Is(err, shortener.ErrAliasConflict) {
-		t.Fatalf("conflicting alias error = %v; want ErrAliasConflict", err)
-	}
-	resolved, err := service.Resolve(ctx, alias)
-	if err != nil || resolved.URL != "https://example.com/docs" {
-		t.Fatalf("mapping was overwritten after conflict: link=%+v err=%v", resolved, err)
-	}
-}
-
-func TestCustomAliasIsHonoredAfterURLWasGenerated(t *testing.T) {
-	store := openTestStore(t)
-	service := shortener.NewService(store, staticGenerator{code: "automatic_code"})
-	ctx := context.Background()
-	target := "https://example.com/already-generated"
-
-	generated, err := service.Shorten(ctx, shortener.ShortenRequest{URL: target})
-	if err != nil {
-		t.Fatalf("generated Shorten() error = %v", err)
-	}
-	alias := "readable_alias"
-	custom, err := service.Shorten(ctx, shortener.ShortenRequest{URL: target, CustomAlias: &alias})
-	if err != nil {
-		t.Fatalf("custom Shorten() error = %v", err)
-	}
-	if !custom.Created || custom.Link.Code != alias {
-		t.Fatalf("custom result = %+v; want newly created alias %q", custom, alias)
-	}
-	if custom.Link.Code == generated.Link.Code {
-		t.Fatalf("explicit alias was ignored in favor of generated code %q", generated.Link.Code)
-	}
-}
-
-func TestCustomAliasCannotOverwriteGeneratedCode(t *testing.T) {
-	store := openTestStore(t)
-	service := shortener.NewService(store, staticGenerator{code: "generated_claim"})
-	ctx := context.Background()
-
-	generated, err := service.Shorten(ctx, shortener.ShortenRequest{URL: "https://existing.example"})
-	if err != nil {
-		t.Fatalf("generated Shorten() error = %v", err)
-	}
-	alias := generated.Link.Code
-	_, err = service.Shorten(ctx, shortener.ShortenRequest{
-		URL:         "https://attacker.example",
-		CustomAlias: &alias,
-	})
-	if !errors.Is(err, shortener.ErrAliasConflict) {
-		t.Fatalf("custom Shorten() error = %v; want ErrAliasConflict", err)
-	}
-	resolved, err := service.Resolve(ctx, generated.Link.Code)
-	if err != nil || resolved.URL != "https://existing.example" {
-		t.Fatalf("generated mapping was overwritten: link=%+v err=%v", resolved, err)
-	}
-}
-
-func TestGeneratedCodeCollisionRetriesWithoutOverwrite(t *testing.T) {
-	store := openTestStore(t)
-	setupService := shortener.NewService(store, staticGenerator{code: "unused"})
-	occupied := "occupied"
-	if _, err := setupService.Shorten(context.Background(), shortener.ShortenRequest{
-		URL:         "https://existing.example",
-		CustomAlias: &occupied,
-	}); err != nil {
-		t.Fatalf("create occupied alias: %v", err)
-	}
-
-	generator := &scriptedGenerator{codes: []string{"occupied", "fresh_code"}}
-	service := shortener.NewService(store, generator)
-	result, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://new.example"})
-	if err != nil {
-		t.Fatalf("Shorten() error = %v", err)
-	}
-	if result.Link.Code != "fresh_code" {
-		t.Fatalf("code = %q; want fresh_code", result.Link.Code)
-	}
-	if calls := generator.Calls(); calls != 2 {
-		t.Fatalf("generator calls = %d; want 2", calls)
-	}
-
-	original, err := service.Resolve(context.Background(), occupied)
-	if err != nil || original.URL != "https://existing.example" {
-		t.Fatalf("occupied alias was overwritten: link=%+v err=%v", original, err)
-	}
-}
-
-func TestGeneratedCodeCollisionExhaustion(t *testing.T) {
-	store := openTestStore(t)
-	service := shortener.NewService(store, staticGenerator{code: "taken"})
-	alias := "taken"
-	if _, err := service.Shorten(context.Background(), shortener.ShortenRequest{
-		URL:         "https://existing.example",
-		CustomAlias: &alias,
-	}); err != nil {
-		t.Fatalf("create occupied alias: %v", err)
-	}
-
-	_, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://new.example"})
-	if !errors.Is(err, shortener.ErrCodeGenerationExhausted) {
-		t.Fatalf("Shorten() error = %v; want ErrCodeGenerationExhausted", err)
-	}
-}
-
-func TestConcurrentGeneratedRequestsConvergeOnOneCode(t *testing.T) {
-	store := openTestStore(t)
-	service := shortener.NewService(store, &countingGenerator{})
-	const workers = 64
-
-	start := make(chan struct{})
-	results := make(chan shortener.ShortenResult, workers)
-	errorsFound := make(chan error, workers)
-	var waitGroup sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			<-start
-			result, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://example.com/concurrent"})
-			if err != nil {
-				errorsFound <- err
-				return
-			}
-			results <- result
-		}()
-	}
-	close(start)
-	waitGroup.Wait()
-	close(results)
-	close(errorsFound)
-
-	for err := range errorsFound {
-		t.Errorf("concurrent Shorten() error = %v", err)
-	}
-	var code string
-	createdCount := 0
-	resultCount := 0
-	for result := range results {
-		resultCount++
-		if code == "" {
-			code = result.Link.Code
-		}
-		if result.Link.Code != code {
-			t.Errorf("got code %q; want all results to use %q", result.Link.Code, code)
-		}
-		if result.Created {
-			createdCount++
-		}
-	}
-	if resultCount != workers {
-		t.Fatalf("successful results = %d; want %d", resultCount, workers)
-	}
-	if createdCount != 1 {
-		t.Fatalf("created results = %d; want 1", createdCount)
-	}
-}
-
-func TestConcurrentDuplicateWithSameCandidateReturnsWinner(t *testing.T) {
-	store := openTestStore(t)
-	generator := newBarrierGenerator("same_candidate", 2)
-	service := shortener.NewService(store, generator)
-	const workers = 2
-
-	results := make(chan shortener.ShortenResult, workers)
-	errorsFound := make(chan error, workers)
-	var waitGroup sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			result, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://example.com/same-candidate"})
-			if err != nil {
-				errorsFound <- err
-				return
-			}
-			results <- result
-		}()
-	}
-	waitGroup.Wait()
-	close(results)
-	close(errorsFound)
-
-	for err := range errorsFound {
-		t.Errorf("concurrent Shorten() error = %v", err)
-	}
-	createdCount := 0
-	resultCount := 0
-	for result := range results {
-		resultCount++
-		if result.Link.Code != "same_candidate" {
-			t.Errorf("code = %q; want same_candidate", result.Link.Code)
-		}
-		if result.Created {
-			createdCount++
-		}
-	}
-	if resultCount != workers || createdCount != 1 {
-		t.Fatalf("results = %d, created = %d; want 2 results and 1 creation", resultCount, createdCount)
-	}
-}
-
-func TestConcurrentAliasClaimHasOneWinner(t *testing.T) {
-	store := openTestStore(t)
-	service := shortener.NewService(store, staticGenerator{code: "unused"})
-	const workers = 32
-	alias := "shared_alias"
-
-	start := make(chan struct{})
-	errorsFound := make(chan error, workers)
-	var successes atomic.Int64
-	var waitGroup sync.WaitGroup
-	for i := 0; i < workers; i++ {
-		i := i
-		waitGroup.Add(1)
-		go func() {
-			defer waitGroup.Done()
-			<-start
-			_, err := service.Shorten(context.Background(), shortener.ShortenRequest{
-				URL:         fmt.Sprintf("https://example.com/%d", i),
-				CustomAlias: &alias,
-			})
-			if err == nil {
-				successes.Add(1)
-				return
-			}
-			if !errors.Is(err, shortener.ErrAliasConflict) {
-				errorsFound <- err
-			}
-		}()
-	}
-	close(start)
-	waitGroup.Wait()
-	close(errorsFound)
-
-	for err := range errorsFound {
-		t.Errorf("unexpected concurrent alias error = %v", err)
-	}
-	if got := successes.Load(); got != 1 {
-		t.Fatalf("successful alias claims = %d; want 1", got)
-	}
-	if _, err := service.Resolve(context.Background(), alias); err != nil {
-		t.Fatalf("winning alias was not stored: %v", err)
-	}
-}
-
-func TestServiceReportsGeneratorFailure(t *testing.T) {
-	store := openTestStore(t)
-	cause := errors.New("entropy unavailable")
-	service := shortener.NewService(store, errorGenerator{err: cause})
-
-	_, err := service.Shorten(context.Background(), shortener.ShortenRequest{URL: "https://example.com"})
-	if !errors.Is(err, shortener.ErrCodeGenerationFailed) {
-		t.Fatalf("Shorten() error = %v; want ErrCodeGenerationFailed", err)
-	}
-	if !errors.Is(err, cause) {
-		t.Fatalf("Shorten() error = %v; want wrapped entropy cause", err)
-	}
-}
-
-func openTestStore(t *testing.T) *filestore.Store {
-	t.Helper()
-	store, err := filestore.Open(filepath.Join(t.TempDir(), "links.json"))
-	if err != nil {
-		t.Fatalf("file.Open() error = %v", err)
-	}
-	return store
-}
-
-type scriptedGenerator struct {
+// scriptedGen returns codes from a queue, so tests can force specific outcomes
+// (e.g. a code that collides with a pre-seeded alias).
+type scriptedGen struct {
 	mu    sync.Mutex
 	codes []string
-	calls int
+	i     int
 }
 
-func (g *scriptedGenerator) Generate() (string, error) {
+func (g *scriptedGen) Generate(context.Context) (string, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	if g.calls >= len(g.codes) {
+	if g.i >= len(g.codes) {
 		return "", errors.New("scripted generator exhausted")
 	}
-	code := g.codes[g.calls]
-	g.calls++
-	return code, nil
+	c := g.codes[g.i]
+	g.i++
+	return c, nil
 }
 
-func (g *scriptedGenerator) Calls() int {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	return g.calls
+func newService(t *testing.T, gen shortener.CodeGenerator) (*shortener.Service, *memory.Store) {
+	t.Helper()
+	st := memory.New()
+	return shortener.New(st, gen, fixedClock{}, nopLogger{}, 4), st
 }
 
-type staticGenerator struct {
-	code string
-}
+func TestShortenGenerated_CreateThenIdempotent(t *testing.T) {
+	svc, _ := newService(t, &scriptedGen{codes: []string{"aaa", "bbb"}})
+	ctx := context.Background()
 
-func (g staticGenerator) Generate() (string, error) {
-	return g.code, nil
-}
-
-type errorGenerator struct {
-	err error
-}
-
-func (g errorGenerator) Generate() (string, error) {
-	return "", g.err
-}
-
-type countingGenerator struct {
-	value atomic.Uint64
-}
-
-func (g *countingGenerator) Generate() (string, error) {
-	return fmt.Sprintf("generated_%d", g.value.Add(1)), nil
-}
-
-type barrierGenerator struct {
-	code     string
-	want     int64
-	arrivals atomic.Int64
-	release  chan struct{}
-}
-
-func newBarrierGenerator(code string, want int64) *barrierGenerator {
-	return &barrierGenerator{code: code, want: want, release: make(chan struct{})}
-}
-
-func (g *barrierGenerator) Generate() (string, error) {
-	if g.arrivals.Add(1) == g.want {
-		close(g.release)
+	first, err := svc.Shorten(ctx, "https://example.com/x", "")
+	if err != nil {
+		t.Fatalf("first shorten: %v", err)
 	}
-	<-g.release
-	return g.code, nil
+	if !first.Created || first.Link.Code != "aaa" {
+		t.Fatalf("want created code aaa, got %+v", first)
+	}
+
+	// Same URL again -> idempotent 200 with the SAME code (no new code minted).
+	second, err := svc.Shorten(ctx, "https://example.com/x", "")
+	if err != nil {
+		t.Fatalf("second shorten: %v", err)
+	}
+	if second.Created || second.Link.Code != "aaa" {
+		t.Fatalf("want idempotent code aaa, got %+v", second)
+	}
+}
+
+func TestShortenGenerated_RetriesOnAliasOverlap(t *testing.T) {
+	// Pre-seed a custom alias "aaa"; the generator first offers "aaa" (collides,
+	// case c), then "bbb" (free). The service must skip and succeed with "bbb".
+	gen := &scriptedGen{codes: []string{"aaa", "bbb"}}
+	svc, st := newService(t, gen)
+	ctx := context.Background()
+
+	if _, err := svc.Shorten(ctx, "https://alias.example", "aaa"); err != nil {
+		t.Fatalf("seed alias: %v", err)
+	}
+	res, err := svc.Shorten(ctx, "https://gen.example", "")
+	if err != nil {
+		t.Fatalf("generated shorten: %v", err)
+	}
+	if !res.Created || res.Link.Code != "bbb" {
+		t.Fatalf("want retried code bbb, got %+v", res)
+	}
+	if got, _ := st.ByCode(ctx, "aaa"); got.URL != "https://alias.example" {
+		t.Fatalf("alias must not be overwritten, got %+v", got)
+	}
+}
+
+func TestShortenGenerated_Exhaustion(t *testing.T) {
+	// Every candidate collides with a pre-seeded alias -> ErrCodeExhausted.
+	gen := &scriptedGen{codes: []string{"c1", "c2", "c3", "c4"}}
+	svc, _ := newService(t, gen)
+	ctx := context.Background()
+	for _, a := range []string{"c1", "c2", "c3", "c4"} {
+		if _, err := svc.Shorten(ctx, "https://a.example/"+a, a); err != nil {
+			t.Fatalf("seed %s: %v", a, err)
+		}
+	}
+	if _, err := svc.Shorten(ctx, "https://gen.example", ""); !errors.Is(err, shortener.ErrCodeExhausted) {
+		t.Fatalf("want ErrCodeExhausted, got %v", err)
+	}
+}
+
+func TestShortenCustom_Semantics(t *testing.T) {
+	svc, _ := newService(t, &scriptedGen{codes: []string{"z1"}})
+	ctx := context.Background()
+
+	// create
+	r1, err := svc.Shorten(ctx, "https://example.com", "promo")
+	if err != nil || !r1.Created {
+		t.Fatalf("create alias: %+v %v", r1, err)
+	}
+	// same alias, same url -> idempotent 200
+	r2, err := svc.Shorten(ctx, "https://example.com", "promo")
+	if err != nil || r2.Created {
+		t.Fatalf("idempotent alias: %+v %v", r2, err)
+	}
+	// same alias, different url -> 409, never overwritten
+	if _, err := svc.Shorten(ctx, "https://evil.example", "promo"); !errors.Is(err, shortener.ErrAliasConflict) {
+		t.Fatalf("want ErrAliasConflict, got %v", err)
+	}
+}
+
+func TestShorten_ValidationErrors(t *testing.T) {
+	svc, _ := newService(t, &scriptedGen{codes: []string{"z1"}})
+	ctx := context.Background()
+	cases := []struct {
+		name, url, alias string
+		want             error
+	}{
+		{"scheme", "ftp://example.com", "", shortener.ErrInvalidURL},
+		{"nohost", "http://", "", shortener.ErrInvalidURL},
+		{"creds", "http://u:p@example.com", "", shortener.ErrInvalidURL},
+		{"space", "http://example.com/a b", "", shortener.ErrInvalidURL},
+		{"badalias", "https://example.com", "no spaces", shortener.ErrInvalidAlias},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := svc.Shorten(ctx, tc.url, tc.alias); !errors.Is(err, tc.want) {
+				t.Fatalf("want %v, got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+func TestResolve(t *testing.T) {
+	svc, _ := newService(t, &scriptedGen{codes: []string{"kk"}})
+	ctx := context.Background()
+	if _, err := svc.Shorten(ctx, "https://example.com/dest", ""); err != nil {
+		t.Fatal(err)
+	}
+	url, err := svc.Resolve(ctx, "kk")
+	if err != nil || url != "https://example.com/dest" {
+		t.Fatalf("resolve hit: %q %v", url, err)
+	}
+	if _, err := svc.Resolve(ctx, "missing"); !errors.Is(err, shortener.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	if _, err := svc.Resolve(ctx, "bad code!"); !errors.Is(err, shortener.ErrNotFound) {
+		t.Fatalf("invalid syntax want ErrNotFound, got %v", err)
+	}
+}
+
+// TestShortenGenerated_ConcurrentSameURL exercises the URL-race (case b): many
+// goroutines shorten the same URL; exactly one code must be assigned and all
+// callers must receive it.
+func TestShortenGenerated_ConcurrentSameURL(t *testing.T) {
+	codes := make([]string, 200)
+	for i := range codes {
+		codes[i] = "c" + string(rune('A'+i%26)) + string(rune('a'+i/26))
+	}
+	st := memory.New()
+	svc := shortener.New(st, &scriptedGen{codes: codes}, fixedClock{}, nopLogger{}, 8)
+
+	const n = 50
+	var wg sync.WaitGroup
+	results := make([]string, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			r, err := svc.Shorten(context.Background(), "https://race.example", "")
+			if err != nil {
+				t.Errorf("goroutine %d: %v", i, err)
+				return
+			}
+			results[i] = r.Link.Code
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 1; i < n; i++ {
+		if results[i] != results[0] {
+			t.Fatalf("concurrent same-URL produced different codes: %q vs %q", results[0], results[i])
+		}
+	}
 }

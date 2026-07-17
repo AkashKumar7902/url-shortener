@@ -1,78 +1,47 @@
+// Package httpapi is the transport layer: routing, strict JSON decoding, and the
+// domain-error to HTTP-status mapping. It holds no business logic.
 package httpapi
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
-	"io"
-	"log/slog"
-	"mime"
 	"net/http"
-	"net/url"
-	"strings"
 
-	"github.com/meakash7902/url-shortener/internal/shortener"
+	"github.com/AkashKumar7902/url-shortener/internal/shortener"
 )
 
-const MaxRequestBody = 16 * 1024
+const maxBodyBytes = 16 * 1024
 
-type LinkService interface {
-	Shorten(ctx context.Context, request shortener.ShortenRequest) (shortener.ShortenResult, error)
-	Resolve(ctx context.Context, code string) (shortener.Link, error)
+// shortenService is the slice of the domain the handler needs.
+type shortenService interface {
+	Shorten(ctx context.Context, rawURL, alias string) (shortener.Result, error)
+	Resolve(ctx context.Context, code string) (string, error)
 }
 
+// Handler wires HTTP to the service.
 type Handler struct {
-	service       LinkService
-	publicBaseURL string
-	logger        *slog.Logger
+	svc     shortenService
+	baseURL string
 }
 
-func New(service LinkService, publicBaseURL string, logger *slog.Logger) (*Handler, error) {
-	normalizedBaseURL, err := normalizeBaseURL(publicBaseURL)
-	if err != nil {
-		return nil, err
-	}
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
-	}
-
-	return &Handler{
-		service:       service,
-		publicBaseURL: normalizedBaseURL,
-		logger:        logger,
-	}, nil
+// New returns a Handler that builds short URLs from baseURL (a trusted origin).
+func New(svc shortenService, baseURL string) *Handler {
+	return &Handler{svc: svc, baseURL: baseURL}
 }
 
-func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("X-Content-Type-Options", "nosniff")
-
-	if r.URL.Path == "/shorten" && r.Method == http.MethodPost {
-		h.handleShorten(w, r)
-		return
-	}
-
-	code, isCodePath := codeFromPath(r.URL.Path)
-	if !isCodePath {
-		h.writeError(w, http.StatusNotFound, "not_found", "short code not found")
-		return
-	}
-	if r.Method != http.MethodGet && r.Method != http.MethodHead {
-		allowed := http.MethodGet + ", " + http.MethodHead
-		if code == "shorten" {
-			allowed += ", " + http.MethodPost
-		}
-		w.Header().Set("Allow", allowed)
-		h.writeError(w, http.StatusMethodNotAllowed, "method_not_allowed", "method not allowed")
-		return
-	}
-
-	h.handleRedirect(w, r, code)
+// Routes registers method-specific routes. Because "POST /shorten" is more
+// specific than "GET /{code}", the code "shorten" is still resolvable via GET.
+func (h *Handler) Routes() http.Handler {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /shorten", h.shorten)
+	mux.HandleFunc("GET /{code}", h.resolve)
+	return mux
 }
 
-type shortenPayload struct {
-	URL         string  `json:"url"`
-	CustomAlias *string `json:"custom_alias,omitempty"`
+type shortenRequest struct {
+	URL         string `json:"url"`
+	CustomAlias string `json:"custom_alias"`
 }
 
 type shortenResponse struct {
@@ -82,148 +51,113 @@ type shortenResponse struct {
 	Created     bool   `json:"created"`
 }
 
-type errorResponse struct {
-	Error apiError `json:"error"`
-}
-
-type apiError struct {
-	Code    string `json:"code"`
-	Message string `json:"message"`
-}
-
-func (h *Handler) handleShorten(w http.ResponseWriter, r *http.Request) {
-	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
-	if err != nil || mediaType != "application/json" {
-		h.writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type", "Content-Type must be application/json")
+func (h *Handler) shorten(w http.ResponseWriter, r *http.Request) {
+	if ct := r.Header.Get("Content-Type"); !isJSON(ct) {
+		writeError(w, errUnsupported)
 		return
 	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestBody)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-
-	var payload shortenPayload
-	if err := decoder.Decode(&payload); err != nil {
-		h.writeJSONDecodeError(w, err)
-		return
-	}
-	if err := expectJSONEnd(decoder); err != nil {
-		h.writeJSONDecodeError(w, err)
-		return
-	}
-
-	result, err := h.service.Shorten(r.Context(), shortener.ShortenRequest{
-		URL:         payload.URL,
-		CustomAlias: payload.CustomAlias,
-	})
+	req, err := decodeStrict[shortenRequest](w, r)
 	if err != nil {
-		h.writeServiceError(w, err)
+		writeError(w, err)
 		return
 	}
 
-	shortURL := h.publicBaseURL + "/" + result.Link.Code
+	res, err := h.svc.Shorten(r.Context(), req.URL, req.CustomAlias)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	shortURL := h.baseURL + "/" + res.Link.Code
 	status := http.StatusOK
-	if result.Created {
+	if res.Created {
 		status = http.StatusCreated
 		w.Header().Set("Location", shortURL)
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(w, status, shortenResponse{
-		Code:        result.Link.Code,
+	writeJSON(w, status, shortenResponse{
+		Code:        res.Link.Code,
 		ShortURL:    shortURL,
-		OriginalURL: result.Link.URL,
-		Created:     result.Created,
+		OriginalURL: res.Link.URL,
+		Created:     res.Created,
 	})
 }
 
-func (h *Handler) handleRedirect(w http.ResponseWriter, r *http.Request, code string) {
-	link, err := h.service.Resolve(r.Context(), code)
-	if errors.Is(err, shortener.ErrNotFound) {
-		h.writeError(w, http.StatusNotFound, "not_found", "short code not found")
-		return
-	}
+func (h *Handler) resolve(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+	url, err := h.svc.Resolve(r.Context(), code)
 	if err != nil {
-		h.logger.Error("resolve short code", "error", err)
-		h.writeError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+		if errors.Is(err, shortener.ErrNotFound) {
+			// A missing code may be created later; do not negatively cache it.
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		writeError(w, err)
 		return
 	}
-
-	// The assignment explicitly requires 301. Links are immutable so a cached
-	// permanent redirect cannot become stale after a destination update.
-	http.Redirect(w, r, link.URL, http.StatusMovedPermanently)
+	// Mappings are immutable, so the redirect is safe to cache forever.
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	http.Redirect(w, r, url, http.StatusMovedPermanently)
 }
 
-func (h *Handler) writeServiceError(w http.ResponseWriter, err error) {
-	switch {
-	case errors.Is(err, shortener.ErrInvalidURL):
-		h.writeError(w, http.StatusBadRequest, "invalid_url", err.Error())
-	case errors.Is(err, shortener.ErrInvalidAlias):
-		h.writeError(w, http.StatusBadRequest, "invalid_alias", err.Error())
-	case errors.Is(err, shortener.ErrAliasConflict):
-		h.writeError(w, http.StatusConflict, "alias_conflict", "custom alias is already in use")
-	default:
-		h.logger.Error("shorten URL", "error", err)
-		h.writeError(w, http.StatusInternalServerError, "internal_error", "an internal error occurred")
+// decodeStrict enforces the 16 KiB cap, rejects unknown fields, and requires
+// exactly one JSON value.
+func decodeStrict[T any](w http.ResponseWriter, r *http.Request) (T, error) {
+	var v T
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+
+	if err := dec.Decode(&v); err != nil {
+		var maxErr *http.MaxBytesError
+		if errors.As(err, &maxErr) {
+			return v, errBodyTooLarge
+		}
+		return v, errBadJSON
 	}
-}
-
-func (h *Handler) writeJSONDecodeError(w http.ResponseWriter, err error) {
-	var maxBytesError *http.MaxBytesError
-	if errors.As(err, &maxBytesError) {
-		h.writeError(w, http.StatusRequestEntityTooLarge, "body_too_large", fmt.Sprintf("request body must not exceed %d bytes", MaxRequestBody))
-		return
+	if dec.More() {
+		return v, errBadJSON
 	}
-	h.writeError(w, http.StatusBadRequest, "invalid_json", "body must be one valid JSON object with only url and optional custom_alias")
+	return v, nil
 }
 
-func (h *Handler) writeError(w http.ResponseWriter, status int, code, message string) {
-	// 404 responses can be cached heuristically. Disabling error caching avoids
-	// a stale negative result if that alias is created later.
-	w.Header().Set("Cache-Control", "no-store")
-	h.writeJSON(w, status, errorResponse{Error: apiError{Code: code, Message: message}})
+func isJSON(contentType string) bool {
+	// Accept "application/json" with optional parameters (e.g. charset).
+	for i := 0; i < len(contentType); i++ {
+		if contentType[i] == ';' {
+			contentType = contentType[:i]
+			break
+		}
+	}
+	return trimSpace(contentType) == "application/json"
 }
 
-func (h *Handler) writeJSON(w http.ResponseWriter, status int, value any) {
+func trimSpace(s string) string {
+	start, end := 0, len(s)
+	for start < end && (s[start] == ' ' || s[start] == '\t') {
+		start++
+	}
+	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
+		end--
+	}
+	return s[start:end]
+}
+
+func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-	if err := json.NewEncoder(w).Encode(value); err != nil {
-		h.logger.Error("encode HTTP response", "error", err)
-	}
+	_ = json.NewEncoder(w).Encode(v)
 }
 
-func codeFromPath(path string) (string, bool) {
-	if len(path) < 2 || path[0] != '/' || strings.Count(path, "/") != 1 {
-		return "", false
+func writeError(w http.ResponseWriter, err error) {
+	ae := statusFor(err)
+	// The Cache-Control for a 404 is set by the caller before this point.
+	type errBody struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
 	}
-	code := path[1:]
-	if shortener.ValidateAlias(code) != nil {
-		return "", false
-	}
-	return code, true
-}
-
-func normalizeBaseURL(raw string) (string, error) {
-	validated, err := shortener.ValidateURL(raw)
-	if err != nil {
-		return "", fmt.Errorf("invalid PUBLIC_BASE_URL: %w", err)
-	}
-	parsed, err := url.Parse(validated)
-	if err != nil {
-		return "", fmt.Errorf("invalid PUBLIC_BASE_URL: %w", err)
-	}
-	if (parsed.Path != "" && parsed.Path != "/") || parsed.ForceQuery || parsed.RawQuery != "" || strings.Contains(validated, "#") {
-		return "", fmt.Errorf("invalid PUBLIC_BASE_URL: path, query, and fragment are not allowed")
-	}
-	return strings.TrimSuffix(validated, "/"), nil
-}
-
-func expectJSONEnd(decoder *json.Decoder) error {
-	var trailing any
-	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
-		if err == nil {
-			return fmt.Errorf("unexpected trailing JSON value")
-		}
-		return err
-	}
-	return nil
+	var body errBody
+	body.Error.Code = ae.code
+	body.Error.Message = ae.message
+	writeJSON(w, ae.status, body)
 }

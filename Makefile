@@ -1,30 +1,24 @@
-GO ?= go
-GOFMT ?= gofmt
+.PHONY: check fmt vet test test-race run build tidy
 
-.PHONY: run build test test-race vet fmt fmt-check check
-
-run:
-	$(GO) run ./cmd/urlshortener
-
-build:
-	mkdir -p bin
-	$(GO) build -trimpath -o bin/urlshortener ./cmd/urlshortener
-
-test:
-	$(GO) test -shuffle=on ./...
-
-test-race:
-	$(GO) test -race -shuffle=on ./...
-
-vet:
-	$(GO) vet ./...
+check: fmt vet test-race
 
 fmt:
-	$(GO) fmt ./...
+	gofmt -l -w .
 
-fmt-check:
-	@command -v $(GOFMT) >/dev/null 2>&1 || (echo "gofmt was not found"; exit 1)
-	@files="$$(find . -type f -name '*.go' -exec $(GOFMT) -l {} +)"; \
-		test -z "$$files" || (echo "Go files need formatting:"; echo "$$files"; exit 1)
+vet:
+	go vet ./...
 
-check: fmt-check vet test-race
+test:
+	go test -shuffle=on ./...
+
+test-race:
+	go test -race -shuffle=on ./...
+
+run:
+	go run ./cmd/urlshortener
+
+build:
+	go build -o bin/urlshortener ./cmd/urlshortener
+
+tidy:
+	go mod tidy

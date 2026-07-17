@@ -3,140 +3,145 @@ package shortener
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 )
 
-const maxCodeAttempts = 8
+// Store is the persistence port the domain depends on. Concrete stores
+// (in-memory, PostgreSQL) implement it and own atomic uniqueness + durability;
+// they hold no URL/alias policy. Defined here so the domain declares its own
+// seam and there is no import cycle.
+type Store interface {
+	// Insert persists l atomically, returning inserted=false (nil error) on a
+	// uniqueness conflict (code, or the url/generated invariant). Never
+	// overwrites.
+	Insert(ctx context.Context, l Link) (inserted bool, err error)
+	// ByCode returns the link for code, or ErrNotFound.
+	ByCode(ctx context.Context, code string) (Link, error)
+	// GeneratedByURL returns the generated link for the exact url, or ErrNotFound.
+	GeneratedByURL(ctx context.Context, url string) (Link, error)
+}
 
+// Clock supplies the current time; injected for deterministic tests.
+type Clock interface{ Now() time.Time }
+
+// Logger is the minimal logging surface the service needs.
+type Logger interface {
+	Info(msg string, kv ...any)
+	Error(msg string, kv ...any)
+}
+
+// Service orchestrates both flows and owns the generated-code retry loop. It is
+// the single place the write-path decision tree lives.
 type Service struct {
-	store     Store
-	generator Generator
-	now       func() time.Time
+	store      Store
+	gen        CodeGenerator
+	clock      Clock
+	log        Logger
+	maxRetries int
 }
 
-func NewService(store Store, generator Generator) *Service {
-	return &Service{
-		store:     store,
-		generator: generator,
-		now:       time.Now,
+// New builds a Service. maxRetries bounds the generated-code retry loop (only
+// the rare alias-overlap case consumes an attempt); <=0 defaults to 4.
+func New(store Store, gen CodeGenerator, clock Clock, log Logger, maxRetries int) *Service {
+	if maxRetries <= 0 {
+		maxRetries = 4
 	}
+	return &Service{store: store, gen: gen, clock: clock, log: log, maxRetries: maxRetries}
 }
 
-// Shorten implements two deliberate identities:
-//   - generated requests are idempotent by exact URL;
-//   - custom requests are idempotent by alias and may create additional
-//     aliases for a URL that was already shortened.
-func (s *Service) Shorten(ctx context.Context, request ShortenRequest) (ShortenResult, error) {
-	rawURL, err := ValidateURL(request.URL)
-	if err != nil {
-		return ShortenResult{}, err
-	}
+// Result is the outcome of Shorten. Created distinguishes 201 from 200.
+type Result struct {
+	Link    Link
+	Created bool
+}
 
-	if request.CustomAlias != nil {
-		return s.shortenCustom(ctx, rawURL, *request.CustomAlias)
+// Shorten validates the URL and either honours a custom alias or mints a
+// generated code. See shortenCustom / shortenGenerated for the branch logic.
+func (s *Service) Shorten(ctx context.Context, rawURL, alias string) (Result, error) {
+	if err := validateURL(rawURL); err != nil {
+		return Result{}, err
 	}
-
+	if alias != "" {
+		return s.shortenCustom(ctx, rawURL, alias)
+	}
 	return s.shortenGenerated(ctx, rawURL)
 }
 
-func (s *Service) Resolve(ctx context.Context, code string) (Link, error) {
-	return s.store.GetByCode(ctx, code)
+// shortenCustom: optimistic insert, then reconcile only on conflict. The insert
+// is the check (race-free); no wasteful write on conflict.
+func (s *Service) shortenCustom(ctx context.Context, rawURL, alias string) (Result, error) {
+	if err := validateAlias(alias); err != nil {
+		return Result{}, err
+	}
+	link := Link{Code: alias, URL: rawURL, Kind: KindCustom, CreatedAt: s.clock.Now()}
+
+	inserted, err := s.store.Insert(ctx, link)
+	if err != nil {
+		return Result{}, err
+	}
+	if inserted {
+		return Result{Link: link, Created: true}, nil // 201
+	}
+
+	existing, err := s.store.ByCode(ctx, alias)
+	if err != nil {
+		return Result{}, err
+	}
+	if existing.URL == rawURL {
+		return Result{Link: existing, Created: false}, nil // 200 idempotent
+	}
+	return Result{}, ErrAliasConflict // 409 — never overwrite
 }
 
-func (s *Service) shortenCustom(ctx context.Context, rawURL, alias string) (ShortenResult, error) {
-	if err := ValidateAlias(alias); err != nil {
-		return ShortenResult{}, err
+// shortenGenerated: dedup fast path, then a bounded retry loop. Insert conflicts
+// are disambiguated by a re-read — a URL race returns the winner (200, no
+// retry); an alias overlap redraws (case c).
+func (s *Service) shortenGenerated(ctx context.Context, rawURL string) (Result, error) {
+	if link, err := s.store.GeneratedByURL(ctx, rawURL); err == nil {
+		return Result{Link: link, Created: false}, nil // 200 fast path
+	} else if !errors.Is(err, ErrNotFound) {
+		return Result{}, err
 	}
 
-	existing, err := s.store.GetByCode(ctx, alias)
-	switch {
-	case err == nil:
-		if existing.URL == rawURL {
-			return ShortenResult{Link: existing, Created: false}, nil
-		}
-		return ShortenResult{}, ErrAliasConflict
-	case !errors.Is(err, ErrNotFound):
-		return ShortenResult{}, fmt.Errorf("look up custom alias: %w", err)
-	}
-
-	link := Link{
-		Code:      alias,
-		URL:       rawURL,
-		Kind:      KindCustom,
-		CreatedAt: s.now().UTC(),
-	}
-	if err := s.store.Insert(ctx, link); err != nil {
-		if !errors.Is(err, ErrCodeAlreadyExists) {
-			return ShortenResult{}, fmt.Errorf("store custom alias: %w", err)
-		}
-
-		// The insert is authoritative. Re-read after a concurrent claimant won.
-		winner, getErr := s.store.GetByCode(ctx, alias)
-		if getErr != nil {
-			return ShortenResult{}, fmt.Errorf("read custom-alias winner: %w", getErr)
-		}
-		if winner.URL == rawURL {
-			return ShortenResult{Link: winner, Created: false}, nil
-		}
-		return ShortenResult{}, ErrAliasConflict
-	}
-
-	return ShortenResult{Link: link, Created: true}, nil
-}
-
-func (s *Service) shortenGenerated(ctx context.Context, rawURL string) (ShortenResult, error) {
-	existing, err := s.store.GetGeneratedByURL(ctx, rawURL)
-	switch {
-	case err == nil:
-		return ShortenResult{Link: existing, Created: false}, nil
-	case !errors.Is(err, ErrNotFound):
-		return ShortenResult{}, fmt.Errorf("look up generated link: %w", err)
-	}
-
-	for attempt := 0; attempt < maxCodeAttempts; attempt++ {
-		code, err := s.generator.Generate()
+	for attempt := 0; attempt < s.maxRetries; attempt++ {
+		code, err := s.gen.Generate(ctx)
 		if err != nil {
-			return ShortenResult{}, fmt.Errorf("%w: %w", ErrCodeGenerationFailed, err)
+			return Result{}, err
 		}
-		if !validGeneratedCode(code) {
-			return ShortenResult{}, fmt.Errorf("%w: generator returned a non-URL-safe code", ErrCodeGenerationFailed)
+		link := Link{Code: code, URL: rawURL, Kind: KindGenerated, CreatedAt: s.clock.Now()}
+
+		inserted, err := s.store.Insert(ctx, link)
+		if err != nil {
+			return Result{}, err
+		}
+		if inserted {
+			return Result{Link: link, Created: true}, nil // case (a) -> 201
 		}
 
-		link := Link{
-			Code:      code,
-			URL:       rawURL,
-			Kind:      KindGenerated,
-			CreatedAt: s.now().UTC(),
+		// No row inserted: distinguish URL race from code collision.
+		existing, err := s.store.GeneratedByURL(ctx, rawURL)
+		if err == nil {
+			return Result{Link: existing, Created: false}, nil // case (b) -> 200
 		}
-		err = s.store.Insert(ctx, link)
-		switch {
-		case err == nil:
-			return ShortenResult{Link: link, Created: true}, nil
-		case errors.Is(err, ErrCodeAlreadyExists):
-			// The candidate collided with either a generated code or custom alias.
-			// Re-read first: a concurrent request may have inserted this same
-			// candidate for this same URL after our initial lookup.
-			winner, getErr := s.store.GetGeneratedByURL(ctx, rawURL)
-			if getErr == nil {
-				return ShortenResult{Link: winner, Created: false}, nil
-			}
-			if !errors.Is(getErr, ErrNotFound) {
-				return ShortenResult{}, fmt.Errorf("check generated link after code conflict: %w", getErr)
-			}
-			// No URL winner exists, so the candidate collided with another
-			// mapping. A new candidate is safe because nothing was overwritten.
-			continue
-		case errors.Is(err, ErrGeneratedURLAlreadyExists):
-			winner, getErr := s.store.GetGeneratedByURL(ctx, rawURL)
-			if getErr != nil {
-				return ShortenResult{}, fmt.Errorf("read generated-link winner: %w", getErr)
-			}
-			return ShortenResult{Link: winner, Created: false}, nil
-		default:
-			return ShortenResult{}, fmt.Errorf("store generated link: %w", err)
+		if !errors.Is(err, ErrNotFound) {
+			return Result{}, err
 		}
+		// case (c): the code collided with a custom alias -> redraw and retry.
+		s.log.Info("generated code collided with an existing alias; retrying",
+			"code", code, "attempt", attempt)
 	}
+	return Result{}, ErrCodeExhausted
+}
 
-	return ShortenResult{}, ErrCodeGenerationExhausted
+// Resolve returns the destination URL for a code, or ErrNotFound. It never
+// writes: redirects are cacheable and analytics must be out-of-band.
+func (s *Service) Resolve(ctx context.Context, code string) (string, error) {
+	if !validCodeSyntax(code) {
+		return "", ErrNotFound
+	}
+	link, err := s.store.ByCode(ctx, code)
+	if err != nil {
+		return "", err
+	}
+	return link.URL, nil
 }

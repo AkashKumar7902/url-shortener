@@ -1,24 +1,17 @@
-FROM golang:1.25-alpine AS build
+# syntax=docker/dockerfile:1
 
+# --- build stage ---
+FROM golang:1.26 AS build
 WORKDIR /src
-COPY go.mod ./
-COPY cmd ./cmd
-COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/urlshortener ./cmd/urlshortener
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+# Static, reproducible binary.
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/urlshortener ./cmd/urlshortener
 
-FROM alpine:3.22
-
-RUN addgroup -S app && adduser -S -G app app \
-    && mkdir -p /data \
-    && chown app:app /data
-WORKDIR /app
-COPY --from=build /out/urlshortener /app/urlshortener
-
-USER app
-ENV HTTP_ADDR=:8080 \
-    PUBLIC_BASE_URL=http://localhost:8080 \
-    DATA_FILE=/data/links.json
+# --- runtime stage ---
+FROM gcr.io/distroless/static-debian12:nonroot
+COPY --from=build /out/urlshortener /urlshortener
 EXPOSE 8080
-VOLUME ["/data"]
-
-ENTRYPOINT ["/app/urlshortener"]
+USER nonroot:nonroot
+ENTRYPOINT ["/urlshortener"]

@@ -1,105 +1,113 @@
+// Command urlshortener is the composition root: it loads config, wires the
+// concrete store/generator/service/transport, and runs the HTTP server with
+// graceful shutdown. It is the only place concrete types meet.
 package main
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
-	"fmt"
-	"log/slog"
+	"log"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"github.com/meakash7902/url-shortener/internal/httpapi"
-	"github.com/meakash7902/url-shortener/internal/shortener"
-	filestore "github.com/meakash7902/url-shortener/internal/store/file"
+	"github.com/AkashKumar7902/url-shortener/internal/config"
+	"github.com/AkashKumar7902/url-shortener/internal/httpapi"
+	"github.com/AkashKumar7902/url-shortener/internal/platform"
+	"github.com/AkashKumar7902/url-shortener/internal/shortener"
+	"github.com/AkashKumar7902/url-shortener/internal/store/memory"
+	"github.com/AkashKumar7902/url-shortener/internal/store/postgres"
 )
 
-type config struct {
-	HTTPAddress   string
-	PublicBaseURL string
-	DataFile      string
-}
-
 func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	if err := run(logger); err != nil {
-		logger.Error("service stopped", "error", err)
-		os.Exit(1)
+	if err := run(); err != nil {
+		log.Fatal(err)
 	}
 }
 
-func run(logger *slog.Logger) error {
-	cfg := loadConfig()
+func run() error {
+	cfg, err := config.Load()
+	if err != nil {
+		return err
+	}
+	logger := platform.NewLogger()
 
-	store, err := filestore.Open(cfg.DataFile)
+	ctx := context.Background()
+	store, gen, closeFn, err := buildStorage(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("open datastore: %w", err)
+		return err
 	}
-	generator, err := shortener.NewRandomGenerator(rand.Reader, shortener.DefaultEntropyBytes)
-	if err != nil {
-		return fmt.Errorf("configure short-code generator: %w", err)
-	}
-	service := shortener.NewService(store, generator)
-	handler, err := httpapi.New(service, cfg.PublicBaseURL, logger)
-	if err != nil {
-		return fmt.Errorf("configure HTTP API: %w", err)
-	}
+	defer closeFn()
 
-	server := &http.Server{
-		Addr:              cfg.HTTPAddress,
-		Handler:           handler,
+	svc := shortener.New(store, gen, platform.SystemClock{}, logger, cfg.MaxRetries)
+	handler := httpapi.New(svc, cfg.PublicBaseURL)
+
+	srv := &http.Server{
+		Addr:              cfg.Addr,
+		Handler:           handler.Routes(),
 		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-		IdleTimeout:       60 * time.Second,
-		MaxHeaderBytes:    1 << 20,
 	}
 
-	shutdownSignal, stopSignals := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stopSignals()
-
-	serverError := make(chan error, 1)
+	// Run and wait for a termination signal, then shut down gracefully.
+	errCh := make(chan error, 1)
 	go func() {
-		logger.Info("starting URL shortener", "address", cfg.HTTPAddress, "public_base_url", cfg.PublicBaseURL)
-		serverError <- server.ListenAndServe()
+		logger.Info("listening", "addr", cfg.Addr, "public_base_url", cfg.PublicBaseURL,
+			"store", storeName(cfg))
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- err
+		}
 	}()
 
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	select {
-	case err := <-serverError:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return fmt.Errorf("serve HTTP: %w", err)
+	case err := <-errCh:
+		return err
+	case <-stop:
+		logger.Info("shutting down")
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return srv.Shutdown(shutdownCtx)
+	}
+}
+
+// buildStorage selects the store and generation strategy from config. With a
+// DATABASE_URL it uses PostgreSQL + block-allocated sequence codes (Option A);
+// otherwise the in-memory store + an in-process counter, so a fresh clone runs
+// with no dependencies.
+func buildStorage(ctx context.Context, cfg config.Config) (shortener.Store, shortener.CodeGenerator, func(), error) {
+	codec := buildCodec(cfg)
+
+	if cfg.DatabaseURL != "" {
+		pg, err := postgres.New(ctx, cfg.DatabaseURL)
+		if err != nil {
+			return nil, nil, nil, err
 		}
-		return nil
-	case <-shutdownSignal.Done():
-		logger.Info("shutting down URL shortener")
+		alloc := shortener.NewBlockAllocator(cfg.BlockSize, pg.NextIDBlock)
+		gen := shortener.NewSequenceGenerator(alloc, codec)
+		return pg, gen, func() { _ = pg.Close() }, nil
 	}
 
-	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := server.Shutdown(shutdownContext); err != nil {
-		return fmt.Errorf("graceful shutdown: %w", err)
-	}
-
-	if err := <-serverError; err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return fmt.Errorf("serve HTTP during shutdown: %w", err)
-	}
-	return nil
+	mem := memory.New()
+	alloc := shortener.NewCounterAllocator(cfg.CodeOffset)
+	gen := shortener.NewSequenceGenerator(alloc, codec)
+	return mem, gen, func() { _ = mem.Close() }, nil
 }
 
-func loadConfig() config {
-	return config{
-		HTTPAddress:   envOrDefault("HTTP_ADDR", ":8080"),
-		PublicBaseURL: envOrDefault("PUBLIC_BASE_URL", "http://localhost:8080"),
-		DataFile:      envOrDefault("DATA_FILE", "./data/links.json"),
+func buildCodec(cfg config.Config) shortener.Codec {
+	base := shortener.Base62{}
+	if cfg.FeistelKey != 0 {
+		// 48-bit domain: opaque, still collision-free, ~9-char codes.
+		return shortener.NewFeistel(base, cfg.FeistelKey, 24)
 	}
+	return base
 }
 
-func envOrDefault(key, fallback string) string {
-	if value := os.Getenv(key); value != "" {
-		return value
+func storeName(cfg config.Config) string {
+	if cfg.DatabaseURL != "" {
+		return "postgres"
 	}
-	return fallback
+	return "memory"
 }

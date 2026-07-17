@@ -1,10 +1,8 @@
 .git
-.gitignore
-.env
-data
 bin
-coverage.out
-coverage.html
-*.test
-README.md
-WRITEUP.md
+data
+*.md
+Dockerfile
+compose.yaml
+.dockerignore
+.gitignore

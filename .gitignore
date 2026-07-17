@@ -1,16 +1,5 @@
-# Runtime data
-/data/
-*.tmp
-
-# Build and test output
 /bin/
-/urlshortener
-coverage.out
-coverage.html
+/data/
+*.out
 *.test
-
-# Local configuration and editor files
-.env
 .DS_Store
-.idea/
-.vscode/
