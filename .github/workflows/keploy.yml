@@ -3,11 +3,15 @@ name: Keploy API Tests
 # Keploy records real API traffic into test cases + mocks, then replays them to
 # catch contract regressions. It uses eBPF, so it only runs on Linux runners.
 #
-# This job runs the service with the in-memory store (no DATABASE_URL), so there
-# are no outbound dependencies to mock — Keploy records HTTP requests/responses
-# and replays them. Codes are deterministic (base62 of an in-memory counter),
-# so replayed responses match byte-for-byte. Kept in its own workflow so the
-# required CI pipeline is unaffected while this is dialled in.
+# The service runs with the in-memory store (no DATABASE_URL), so there are no
+# outbound dependencies to mock — Keploy records HTTP requests/responses and
+# replays them. Codes are deterministic (base62 of an in-memory counter), so
+# replayed responses match byte-for-byte.
+#
+# The current Keploy CLI REQUIRES authentication. Add a repository secret named
+# KEPLOY_API_KEY (from https://app.keploy.io -> API keys). Without it, this job
+# skips cleanly rather than failing. Kept in its own workflow so the required CI
+# pipeline is unaffected.
 
 on:
   push:
@@ -21,29 +25,45 @@ jobs:
   keploy:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      KEPLOY_API_KEY: ${{ secrets.KEPLOY_API_KEY }}
     steps:
+      - name: Check for Keploy API key
+        id: guard
+        run: |
+          if [ -z "$KEPLOY_API_KEY" ]; then
+            echo "::warning::KEPLOY_API_KEY secret is not set — skipping Keploy tests. Add it under Settings → Secrets and variables → Actions."
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: actions/checkout@v4
+        if: steps.guard.outputs.enabled == 'true'
 
       - uses: actions/setup-go@v5
+        if: steps.guard.outputs.enabled == 'true'
         with:
           go-version: "1.26"
           cache: true
 
       - name: Build binary
+        if: steps.guard.outputs.enabled == 'true'
         run: go build -o urlshortener ./cmd/urlshortener
 
       - name: Install Keploy
+        if: steps.guard.outputs.enabled == 'true'
         run: |
           curl --silent -L https://keploy.io/install.sh | bash
           keploy --version || true
 
       - name: Record API test cases
+        if: steps.guard.outputs.enabled == 'true'
         env:
           HTTP_ADDR: ":8080"
           PUBLIC_BASE_URL: "http://localhost:8080"
         run: |
           set -x
-          # Ignore the non-deterministic Date response header during comparison.
           keploy config --generate || true
           if [ -f keploy.yml ]; then
             sed -i 's/global: {}/global: {"header":{"Date":[]}}/' keploy.yml || true
@@ -57,44 +77,47 @@ jobs:
               sleep 1
             done
             sleep 2
-
-            # Generated code: create, then repeat (idempotent 200).
             curl -s -X POST -H 'Content-Type: application/json' \
               -d '{"url":"https://example.com/one"}' http://localhost:8080/shorten
             curl -s -X POST -H 'Content-Type: application/json' \
               -d '{"url":"https://example.com/one"}' http://localhost:8080/shorten
-            # Custom alias: create.
             curl -s -X POST -H 'Content-Type: application/json' \
               -d '{"url":"https://example.com/two","custom_alias":"docs"}' http://localhost:8080/shorten
-            # Redirects and a miss.
             curl -s -o /dev/null http://localhost:8080/docs
             curl -s -o /dev/null http://localhost:8080/missing
-            # Validation errors.
             curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
               -d '{"url":"ftp://nope"}' http://localhost:8080/shorten
-
             sleep 5
             sudo kill -INT "$(pgrep -n -f 'keploy record')" 2>/dev/null || true
           }
 
           send_traffic &
           sudo -E env PATH="$PATH" HTTP_ADDR="$HTTP_ADDR" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
-            keploy record -c "./urlshortener" 2>&1 | tee record.log
-          echo "recorded test cases:"; ls -R keploy/ || true
+            keploy record --api-key "$KEPLOY_API_KEY" -c "./urlshortener" 2>&1 | tee record.log
+
+          echo "recorded test cases:"; ls -R keploy/ 2>/dev/null || true
+          if [ ! -d keploy ] || [ -z "$(find keploy -name '*.yaml' -print -quit 2>/dev/null)" ]; then
+            echo "::error::Keploy recorded no test cases (check auth / record.log)"
+            exit 1
+          fi
 
       - name: Replay API test cases
+        if: steps.guard.outputs.enabled == 'true'
         env:
           HTTP_ADDR: ":8080"
           PUBLIC_BASE_URL: "http://localhost:8080"
         run: |
           set -x
           sudo -E env PATH="$PATH" HTTP_ADDR="$HTTP_ADDR" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
-            keploy test -c "./urlshortener" --delay 10 2>&1 | tee test.log
+            keploy test --api-key "$KEPLOY_API_KEY" -c "./urlshortener" --delay 10 2>&1 | tee test.log
 
-          # Fail the job if any recorded test set did not pass.
+          reports="$(find keploy/reports -name '*-report.yaml' 2>/dev/null)"
+          if [ -z "$reports" ]; then
+            echo "::error::No Keploy test reports were produced — replay did not run"
+            exit 1
+          fi
           fail=0
-          for report in keploy/reports/*/*-report.yaml; do
-            [ -f "$report" ] || continue
+          for report in $reports; do
             status="$(grep -m1 'status:' "$report" | awk '{print $2}')"
             echo "$report -> $status"
             [ "$status" = "PASSED" ] || fail=1
@@ -106,7 +129,7 @@ jobs:
           echo "All Keploy test sets passed"
 
       - name: Upload Keploy artifacts
-        if: always()
+        if: always() && steps.guard.outputs.enabled == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: keploy-results

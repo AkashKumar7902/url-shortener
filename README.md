@@ -194,6 +194,21 @@ Every axis of likely change is an interface, so it can be swapped in one place:
 | `MAX_RETRIES` | `4` | Bound on the generated-code retry loop. |
 | `FEISTEL_KEY` | `0` | If non-zero, generated codes are Feistel-permuted (opaque, non-sequential). |
 
+## Continuous integration
+
+`.github/workflows/ci.yml` runs on every push/PR: `gofmt`, `go vet`, `go mod
+tidy` drift check, and `go test -race -shuffle=on ./...`; a second job runs the
+PostgreSQL store against a service container (`-tags=integration`); and a Docker
+job publishes to GHCR only on a `v*` tag.
+
+`.github/workflows/keploy.yml` runs [Keploy](https://keploy.io) API
+record/replay tests: it starts the service (in-memory store), records real HTTP
+traffic into test cases, then replays them to catch contract regressions. The
+current Keploy CLI requires authentication, so this job needs a repository
+secret **`KEPLOY_API_KEY`** (from https://app.keploy.io → API keys). Without the
+secret the job skips cleanly. Add it under *Settings → Secrets and variables →
+Actions → New repository secret*.
+
 ## Scope and next steps
 
 Analytics is intentionally omitted: a `301` can be cached by browsers and
