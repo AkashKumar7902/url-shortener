@@ -3,3 +3,8 @@
 *.out
 *.test
 .DS_Store
+
+# Keploy local artifacts (root config + recorded testcases; not the workflow)
+/keploy.yml
+/keploy/
+/urlshortener

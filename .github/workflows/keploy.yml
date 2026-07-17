@@ -1,0 +1,117 @@
+name: Keploy API Tests
+
+# Keploy records real API traffic into test cases + mocks, then replays them to
+# catch contract regressions. It uses eBPF, so it only runs on Linux runners.
+#
+# This job runs the service with the in-memory store (no DATABASE_URL), so there
+# are no outbound dependencies to mock — Keploy records HTTP requests/responses
+# and replays them. Codes are deterministic (base62 of an in-memory counter),
+# so replayed responses match byte-for-byte. Kept in its own workflow so the
+# required CI pipeline is unaffected while this is dialled in.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  keploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache: true
+
+      - name: Build binary
+        run: go build -o urlshortener ./cmd/urlshortener
+
+      - name: Install Keploy
+        run: |
+          curl --silent -L https://keploy.io/install.sh | bash
+          keploy --version || true
+
+      - name: Record API test cases
+        env:
+          HTTP_ADDR: ":8080"
+          PUBLIC_BASE_URL: "http://localhost:8080"
+        run: |
+          set -x
+          # Ignore the non-deterministic Date response header during comparison.
+          keploy config --generate || true
+          if [ -f keploy.yml ]; then
+            sed -i 's/global: {}/global: {"header":{"Date":[]}}/' keploy.yml || true
+          fi
+
+          send_traffic() {
+            # Wait for the server to accept TCP connections (no HTTP request, so
+            # no stray test case is recorded during the wait).
+            for _ in $(seq 1 30); do
+              if (echo > /dev/tcp/localhost/8080) 2>/dev/null; then break; fi
+              sleep 1
+            done
+            sleep 2
+
+            # Generated code: create, then repeat (idempotent 200).
+            curl -s -X POST -H 'Content-Type: application/json' \
+              -d '{"url":"https://example.com/one"}' http://localhost:8080/shorten
+            curl -s -X POST -H 'Content-Type: application/json' \
+              -d '{"url":"https://example.com/one"}' http://localhost:8080/shorten
+            # Custom alias: create.
+            curl -s -X POST -H 'Content-Type: application/json' \
+              -d '{"url":"https://example.com/two","custom_alias":"docs"}' http://localhost:8080/shorten
+            # Redirects and a miss.
+            curl -s -o /dev/null http://localhost:8080/docs
+            curl -s -o /dev/null http://localhost:8080/missing
+            # Validation errors.
+            curl -s -o /dev/null -X POST -H 'Content-Type: application/json' \
+              -d '{"url":"ftp://nope"}' http://localhost:8080/shorten
+
+            sleep 5
+            sudo kill -INT "$(pgrep -n -f 'keploy record')" 2>/dev/null || true
+          }
+
+          send_traffic &
+          sudo -E env PATH="$PATH" HTTP_ADDR="$HTTP_ADDR" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
+            keploy record -c "./urlshortener" 2>&1 | tee record.log
+          echo "recorded test cases:"; ls -R keploy/ || true
+
+      - name: Replay API test cases
+        env:
+          HTTP_ADDR: ":8080"
+          PUBLIC_BASE_URL: "http://localhost:8080"
+        run: |
+          set -x
+          sudo -E env PATH="$PATH" HTTP_ADDR="$HTTP_ADDR" PUBLIC_BASE_URL="$PUBLIC_BASE_URL" \
+            keploy test -c "./urlshortener" --delay 10 2>&1 | tee test.log
+
+          # Fail the job if any recorded test set did not pass.
+          fail=0
+          for report in keploy/reports/*/*-report.yaml; do
+            [ -f "$report" ] || continue
+            status="$(grep -m1 'status:' "$report" | awk '{print $2}')"
+            echo "$report -> $status"
+            [ "$status" = "PASSED" ] || fail=1
+          done
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::One or more Keploy test sets failed"
+            exit 1
+          fi
+          echo "All Keploy test sets passed"
+
+      - name: Upload Keploy artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: keploy-results
+          path: |
+            keploy/
+            record.log
+            test.log
+          if-no-files-found: ignore
