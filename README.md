@@ -234,11 +234,3 @@ To re-record after an API change, run it locally and commit the result:
 git add keploy/ && git commit -m "test(keploy): re-record API test cases"
 ```
 
-## Scope and next steps
-
-Analytics is intentionally omitted: a `301` can be cached by browsers and
-intermediaries, so an origin-side counter would not represent every visit; any
-future analytics must be asynchronous and out-of-band. Further work: auth, rate
-limits, and abuse controls (the service is an intentional open redirector);
-metrics/tracing that avoid destination query strings; and reconsidering
-permanent redirects if editable links, expiry, or deletion are added.
