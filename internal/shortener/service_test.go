@@ -3,6 +3,7 @@ package shortener_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -143,6 +144,21 @@ func TestShorten_ValidationErrors(t *testing.T) {
 				t.Fatalf("want %v, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+func TestShorten_URLLengthBoundary(t *testing.T) {
+	svc, _ := newService(t, &scriptedGen{codes: []string{"max"}})
+	ctx := context.Background()
+	const prefix = "https://example.com/"
+	maxURL := prefix + strings.Repeat("a", 8*1024-len(prefix))
+
+	result, err := svc.Shorten(ctx, maxURL, "")
+	if err != nil || !result.Created {
+		t.Fatalf("8 KiB URL should be accepted: result=%+v err=%v", result, err)
+	}
+	if _, err := svc.Shorten(ctx, maxURL+"a", ""); !errors.Is(err, shortener.ErrInvalidURL) {
+		t.Fatalf("URL above 8 KiB should be rejected with ErrInvalidURL, got %v", err)
 	}
 }
 

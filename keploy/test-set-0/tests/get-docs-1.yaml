@@ -14,14 +14,14 @@ spec:
       Host: localhost:8080
       User-Agent: curl/7.81.0
     body: ""
-    timestamp: 2026-07-17T08:31:28.027905171Z
+    timestamp: 2026-07-17T09:10:53.467148713Z
   resp:
     status_code: 301
     header:
       Cache-Control: public, max-age=31536000, immutable
       Content-Length: "58"
       Content-Type: text/html; charset=utf-8
-      Date: Fri, 17 Jul 2026 08:31:28 GMT
+      Date: Fri, 17 Jul 2026 09:10:53 GMT
       Location: https://example.com/two
     body: |+
       <a href="https://example.com/two">Moved Permanently</a>.
@@ -29,16 +29,16 @@ spec:
     status_message: Moved Permanently
     proto_major: 0
     proto_minor: 0
-    timestamp: 2026-07-17T08:31:28.028459296Z
+    timestamp: 2026-07-17T09:10:53.467600463Z
   objects: []
   assertions:
     noise:
       header.Date: []
-  created: 1784277088
+  created: 1784279453
   app_port: 8080
 curl: |
   curl --request GET \
     --url http://localhost:8080/docs \
-    --header 'Accept: */*' \
     --header 'Host: localhost:8080' \
     --header 'User-Agent: curl/7.81.0' \
+    --header 'Accept: */*' \

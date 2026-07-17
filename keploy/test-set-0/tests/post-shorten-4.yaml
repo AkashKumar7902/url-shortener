@@ -16,30 +16,30 @@ spec:
       Host: localhost:8080
       User-Agent: curl/7.81.0
     body: '{"url":"ftp://nope"}'
-    timestamp: 2026-07-17T08:31:28.034696671Z
+    timestamp: 2026-07-17T09:10:53.473561921Z
   resp:
     status_code: 400
     header:
       Content-Length: "73"
       Content-Type: application/json; charset=utf-8
-      Date: Fri, 17 Jul 2026 08:31:28 GMT
+      Date: Fri, 17 Jul 2026 09:10:53 GMT
     body: |
       {"error":{"code":"invalid_url","message":"the provided URL is invalid"}}
     status_message: Bad Request
     proto_major: 0
     proto_minor: 0
-    timestamp: 2026-07-17T08:31:28.034845046Z
+    timestamp: 2026-07-17T09:10:53.473723921Z
   objects: []
   assertions:
     noise:
       header.Date: []
-  created: 1784277088
+  created: 1784279453
   app_port: 8080
 curl: |-
   curl --request POST \
     --url http://localhost:8080/shorten \
-    --header 'Content-Type: application/json' \
-    --header 'Host: localhost:8080' \
     --header 'User-Agent: curl/7.81.0' \
     --header 'Accept: */*' \
+    --header 'Content-Type: application/json' \
+    --header 'Host: localhost:8080' \
     --data "{\"url\":\"ftp://nope\"}"

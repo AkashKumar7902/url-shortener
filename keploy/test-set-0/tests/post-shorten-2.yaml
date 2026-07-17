@@ -16,30 +16,30 @@ spec:
       Host: localhost:8080
       User-Agent: curl/7.81.0
     body: '{"url":"https://example.com/one"}'
-    timestamp: 2026-07-17T08:31:28.020081879Z
+    timestamp: 2026-07-17T09:10:53.460261296Z
   resp:
     status_code: 200
     header:
       Content-Length: "118"
       Content-Type: application/json; charset=utf-8
-      Date: Fri, 17 Jul 2026 08:31:28 GMT
+      Date: Fri, 17 Jul 2026 09:10:53 GMT
     body: |
       {"code":"15ftgG","short_url":"http://localhost:8080/15ftgG","original_url":"https://example.com/one","created":false}
     status_message: OK
     proto_major: 0
     proto_minor: 0
-    timestamp: 2026-07-17T08:31:28.020628879Z
+    timestamp: 2026-07-17T09:10:53.460781254Z
   objects: []
   assertions:
     noise:
       header.Date: []
-  created: 1784277088
+  created: 1784279453
   app_port: 8080
 curl: |-
   curl --request POST \
     --url http://localhost:8080/shorten \
-    --header 'Host: localhost:8080' \
-    --header 'User-Agent: curl/7.81.0' \
     --header 'Accept: */*' \
     --header 'Content-Type: application/json' \
+    --header 'Host: localhost:8080' \
+    --header 'User-Agent: curl/7.81.0' \
     --data "{\"url\":\"https://example.com/one\"}"

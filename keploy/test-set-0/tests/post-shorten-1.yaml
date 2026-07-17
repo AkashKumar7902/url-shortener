@@ -16,25 +16,25 @@ spec:
       Host: localhost:8080
       User-Agent: curl/7.81.0
     body: '{"url":"https://example.com/one"}'
-    timestamp: 2026-07-17T08:31:27.996142046Z
+    timestamp: 2026-07-17T09:10:53.449166379Z
   resp:
     status_code: 201
     header:
       Content-Length: "117"
       Content-Type: application/json; charset=utf-8
-      Date: Fri, 17 Jul 2026 08:31:28 GMT
+      Date: Fri, 17 Jul 2026 09:10:53 GMT
       Location: http://localhost:8080/15ftgG
     body: |
       {"code":"15ftgG","short_url":"http://localhost:8080/15ftgG","original_url":"https://example.com/one","created":true}
     status_message: Created
     proto_major: 0
     proto_minor: 0
-    timestamp: 2026-07-17T08:31:28.014567671Z
+    timestamp: 2026-07-17T09:10:53.456735046Z
   objects: []
   assertions:
     noise:
       header.Date: []
-  created: 1784277088
+  created: 1784279453
   app_port: 8080
 curl: |-
   curl --request POST \

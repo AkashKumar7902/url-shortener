@@ -6,6 +6,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -73,14 +74,18 @@ func run() error {
 	}
 }
 
-// buildStorage selects the store and generation strategy from config. With a
-// DATABASE_URL it uses PostgreSQL + block-allocated sequence codes (Option A);
-// otherwise the in-memory store + an in-process counter, so a fresh clone runs
-// with no dependencies.
+// buildStorage selects the store and generation strategy from the explicitly
+// configured backend. Configuration validation normally rejects unknown or
+// contradictory values; the default branch keeps this boundary fail-closed for
+// direct callers as well.
 func buildStorage(ctx context.Context, cfg config.Config) (shortener.Store, shortener.CodeGenerator, func(), error) {
 	codec := buildCodec(cfg)
 
-	if cfg.DatabaseURL != "" {
+	switch cfg.StoreBackend {
+	case config.StoreBackendPostgres:
+		if cfg.DatabaseURL == "" {
+			return nil, nil, nil, errors.New("postgres store requires DATABASE_URL")
+		}
 		pg, err := postgres.New(ctx, cfg.DatabaseURL)
 		if err != nil {
 			return nil, nil, nil, err
@@ -88,12 +93,17 @@ func buildStorage(ctx context.Context, cfg config.Config) (shortener.Store, shor
 		alloc := shortener.NewBlockAllocator(cfg.BlockSize, pg.NextIDBlock)
 		gen := shortener.NewSequenceGenerator(alloc, codec)
 		return pg, gen, func() { _ = pg.Close() }, nil
+	case config.StoreBackendMemory:
+		if cfg.DatabaseURL != "" {
+			return nil, nil, nil, errors.New("memory store cannot be configured with DATABASE_URL")
+		}
+		mem := memory.New()
+		alloc := shortener.NewCounterAllocator(cfg.CodeOffset)
+		gen := shortener.NewSequenceGenerator(alloc, codec)
+		return mem, gen, func() { _ = mem.Close() }, nil
+	default:
+		return nil, nil, nil, fmt.Errorf("unsupported store backend %q", cfg.StoreBackend)
 	}
-
-	mem := memory.New()
-	alloc := shortener.NewCounterAllocator(cfg.CodeOffset)
-	gen := shortener.NewSequenceGenerator(alloc, codec)
-	return mem, gen, func() { _ = mem.Close() }, nil
 }
 
 func buildCodec(cfg config.Config) shortener.Codec {
@@ -106,8 +116,5 @@ func buildCodec(cfg config.Config) shortener.Codec {
 }
 
 func storeName(cfg config.Config) string {
-	if cfg.DatabaseURL != "" {
-		return "postgres"
-	}
-	return "memory"
+	return string(cfg.StoreBackend)
 }
